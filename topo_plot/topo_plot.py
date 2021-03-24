@@ -4,11 +4,14 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 from matplotlib import animation
+import matplotlib.patches as mpatch
 
 matplotlib.use('tkagg')
 
 stime = time.time()
 
+record_mode = False
+num_frames_to_record = 80
 
 # plots csv-formatted data read on standard input.
 # expects each line to have the format: time, value
@@ -62,53 +65,15 @@ def startTopoPlot():
 
 
 def runTopoPlot(layout, G, ax, fig):
+  global num_frames_to_record, record_mode
+  if (not record_mode):
+    num_frames_to_record = 2
   # run the plot. update in real time, saving the first K frames
-  K = 10
-  ani = animation.FuncAnimation(fig, topoQuiverUpdate, frames=K, fargs=(layout, G, ax))
+  ani = animation.FuncAnimation(fig, topoQuiverUpdate, frames=num_frames_to_record, fargs=(layout, G, ax))
   # ani = animation.FuncAnimation(fig, topoPlotUpdate, frames=K, fargs=(layout, G, ax))
   ani.save('offlineTopoPlot.gif', writer='imagemagick')
   plt.show()
 
-
-# plot with rate represented by arrow sizes.
-def topoPlotUpdate(num, pos, G, ax):
-  ctime = time.time()
-  etime = round(ctime - stime, 2)
-  ax.clear()
-  ax.set_xlim((-1, 1))
-  ax.set_ylim((-1, 1))
-
-  for node in G.nodes(data=True):
-    nx.draw_networkx_nodes(
-      G, 
-      pos, 
-      [node[0]], 
-      # node_color=node[1]['color'], 
-      linewidths=5,
-      edgecolors=node[1]['color'],
-      node_color="white",
-      ax = ax, 
-      node_size=2500,
-      node_shape = "s"
-    )
-  nx.draw_networkx_labels(G, pos=pos, ax=ax)
-  # draw each edge individually. 
-  for edge in G.edges(data=True):
-    cur_rate = random.randint(1, 10)
-    st = f"arc3, rad = .1"
-    if "rad" in edge[2]:
-      st = f"arc3, rad = {edge[2]['rad']}"
-    nx.draw_networkx_edges(G, pos, edgelist=[edge], 
-      width = cur_rate, 
-      # arrowstyle = matplotlib.patches.ArrowStyle.Simple(tail_width = cur_rate * .5, head_width = cur_rate),
-      # arrowstyle = matplotlib.patches.ArrowStyle.Wedge(tail_width=1, shrink_factor=.8),
-      arrowsize = cur_rate*5,
-      min_source_margin = 20,
-      min_target_margin = 30,
-      connectionstyle=st,
-      edge_color = edge[2]['color'])
-  # Set the title
-  ax.set_title("Time {0}".format(etime))
 
 
 
@@ -182,14 +147,22 @@ def plot_edge(ax, edge, rate, frame_offset):
       color = flow_color[flowtype], 
       scale =  10,
       width = pt_width
-      # linewidths=pt_width,
-      # edgecolors = flow_color[flowtype]
-
       )
-      # width = pt_width,
-      # headwidth = 2,
-      # headlength = 2,
-      # headaxislength = 1)
+
+def draw_alert(ax):
+  rectangles = {'Attack!' : mpatch.Rectangle((.25, -.5), .5, .25, linewidth=1, edgecolor='r', color='r')}
+
+  for r in rectangles:
+      ax.add_artist(rectangles[r])
+      rx, ry = rectangles[r].get_xy()
+      cx = rx + rectangles[r].get_width()/2.0
+      cy = ry + rectangles[r].get_height()/2.0
+
+      ax.annotate(r, (cx, cy), color='w', weight='bold', 
+                  fontsize=12, ha='center', va='center')
+
+
+
 
 def topoQuiverUpdate(num, pos, G, ax):
   data_in = read_input()
@@ -234,10 +207,14 @@ def topoQuiverUpdate(num, pos, G, ax):
       else:
         edge_key = frozenset(("Client", "Server"))
     rate = rates[edge_key]
-    plot_edge(ax, edge, rate, (num%10*.1))
+    plot_edge(ax, edge, rate, (num%2*.5))
 
+  if (cli_to_server < 1):
+    draw_alert(ax)
   # Set the title
+
   ax.set_title("Time {0}".format(etime))
+
 
 
 def testreadinput():
@@ -321,6 +298,49 @@ def continuePlot(fig, ax, l1):
 def signal_handler(sig, frame):
   print('Exitting.')
   sys.exit(0)
+
+## OLD CODE, NOT USED
+# plot with rate represented by arrow sizes.
+def topoPlotUpdate(num, pos, G, ax):
+  ctime = time.time()
+  etime = round(ctime - stime, 2)
+  ax.clear()
+  ax.set_xlim((-1, 1))
+  ax.set_ylim((-1, 1))
+
+  for node in G.nodes(data=True):
+    nx.draw_networkx_nodes(
+      G, 
+      pos, 
+      [node[0]], 
+      # node_color=node[1]['color'], 
+      linewidths=5,
+      edgecolors=node[1]['color'],
+      node_color="white",
+      ax = ax, 
+      node_size=2500,
+      node_shape = "s"
+    )
+  nx.draw_networkx_labels(G, pos=pos, ax=ax)
+  # draw each edge individually. 
+  for edge in G.edges(data=True):
+    cur_rate = random.randint(1, 10)
+    st = f"arc3, rad = .1"
+    if "rad" in edge[2]:
+      st = f"arc3, rad = {edge[2]['rad']}"
+    nx.draw_networkx_edges(G, pos, edgelist=[edge], 
+      width = cur_rate, 
+      # arrowstyle = matplotlib.patches.ArrowStyle.Simple(tail_width = cur_rate * .5, head_width = cur_rate),
+      # arrowstyle = matplotlib.patches.ArrowStyle.Wedge(tail_width=1, shrink_factor=.8),
+      arrowsize = cur_rate*5,
+      min_source_margin = 20,
+      min_target_margin = 30,
+      connectionstyle=st,
+      edge_color = edge[2]['color'])
+  # Set the title
+  ax.set_title("Time {0}".format(etime))
+
+
 
 
 if __name__ == '__main__':
