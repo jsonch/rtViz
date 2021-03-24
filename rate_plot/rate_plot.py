@@ -16,6 +16,9 @@ stime = time.time()
 y_var_names = ["Attack Rate", "Drone Rate"]
 y_colors = ["red", "blue"]
 
+record_mode = False
+num_frames_to_record = 20
+
 def main():
   if sys.stdin.isatty():
     print("Please use a pipe as stdin\n")
@@ -56,8 +59,10 @@ def startPlot():
   return fig, ax, lines
 
 def runPlot(fig, ax, lines):
-  K=10
-  ani = animation.FuncAnimation(fig, plotUpdate, frames=K, fargs=(fig, ax, lines))
+  global num_frames_to_record, record_mode
+  if (not record_mode):
+    num_frames_to_record = 2
+  ani = animation.FuncAnimation(fig, plotUpdate, frames=num_frames_to_record, fargs=(fig, ax, lines))
   ani.save('offlinePlot.gif', writer='imagemagick')
   plt.show()
 
