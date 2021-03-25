@@ -6,6 +6,7 @@ import subprocess
 import time
 import re
 import copy
+import argparse
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -14,8 +15,14 @@ import numpy as np
 from matplotlib import animation
 import matplotlib.patches as mpatch
 
-# use real measurements or random data
-testMode = False
+parser = argparse.ArgumentParser()
+parser.add_argument("--test", help="test mode (random data)", action = "store_true")
+parser.add_argument("--client", default = None)
+parser.add_argument("--attacker", default = None)
+parser.add_argument("-i", default = .2)
+parser.add_argument("--max", default = 10, help = "maximum expected traffic rate, in Gb/s")
+parser.add_argument("--thresh", default = 6, help = "threshold to consider an attack, in Gb/s")
+
 
 client = "10.0.0.1"
 attacker = "10.0.0.3"
@@ -29,10 +36,24 @@ max_arrow_width = 5.0
 min_flow_rate = 0
 max_flow_rate = 10**9 # 1 Gb/s
 
-
 def main():
+  args = parser.parse_args()
+  if ((args.client == None) and (args.attacker == None) and (args.test == False)):
+    print ("error: you must either run in testmode (--test) or provide client (--client) and attacker (--attacker) IP address.")
+    quit()
+  print ("arguments: ")
+  print ("test mode? %s"%args.test)
+  print ("client   IP: %s"%args.client)
+  print ("attacker IP: %s"%args.attacker)
+  print ("interval: %s"%args.i)
+  print ("maximum rate (for graph scaling): %s Gb/s"%args.max)
+  print ("attack threshold: %s Gb/s"%args.thresh)
+  global max_flow_rate
+  max_flow_rate = 10**9 * float(args.max)
+  global attack_threshold
+  attack_threshold = 10**9 * float(args.thresh)
   measQ = Queue()
-  mthread = Thread(target = measLoop, args = (client, attacker, measQ, interval))
+  mthread = Thread(target = measLoop, args = (client, attacker, measQ, args.i, args.test))
   mthread.daemon = True
   mthread.start()
   plotLoop(measQ)
@@ -40,7 +61,7 @@ def main():
 
 
 ### Flow measurement ###
-def measLoop(clientIp, attackIp, measQ, interval = 1):    
+def measLoop(clientIp, attackIp, measQ, interval = 1, test = True):    
   # measure the change in timestamp, client flow size, and attack flow size
   print ("starting flow measurement thread")
   meas = measFlows(clientIp, attackIp)
@@ -50,8 +71,8 @@ def measLoop(clientIp, attackIp, measQ, interval = 1):
     meas_delta = calcDelta(meas, new_meas)
     meas = new_meas
     time.sleep(interval)
-    # generate random data if testmode
-    if (testMode):
+    # generate random data if test mode
+    if (test):
       meas_delta["client_bytes"] = 1000000
       meas_delta["attack_bytes"] = 100000000
     measQ.put(meas_delta)
@@ -119,6 +140,8 @@ def plotLoop(measQ):
   G, ax, fig = startTopoPlot()
   runTopoPlot(measQ, G, ax, fig)
   return 1
+
+# todo: add the rate plot in the same frame
 
 def startTopoPlot():
   # Build plot
