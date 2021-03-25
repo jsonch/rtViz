@@ -20,3 +20,10 @@ Two options:
 
 In either case, the question is how to discriminate from drone vs attack traffic.
 
+
+required libraries:
+
+python>=3.6
+numpy
+matplotlib
+networkx

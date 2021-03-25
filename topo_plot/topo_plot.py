@@ -75,8 +75,6 @@ def runTopoPlot(layout, G, ax, fig):
   plt.show()
 
 
-
-
 ##### quiver-based edges 
 next_hop = {
   "Attacker":"Switch",
