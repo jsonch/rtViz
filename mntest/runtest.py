@@ -9,6 +9,7 @@ to complete.
 """
 
 from sys import argv
+import time
 
 from mininet.cli import CLI
 from mininet.topo import Topo
@@ -49,9 +50,12 @@ def attackCli():
 
     a, s, c = net.getNodeByName('attacker', 'server', 'client')
 
+    s.cmd('tcpdump -i server-eth0 -B 4096 -nnnne -s 100 -w attackrun.pcap &')
     s.cmd('iperf -s &')
-    c.cmd('iperf -c 10.0.0.2 -t 600 > client_iperf.log.txt &')
-    a.cmd('iperf -c 10.0.0.2 -t 600 > attacker_iperf.log.txt &')
+    s.cmd('iperf -u -s &')
+    c.cmd('iperf -c 10.0.0.2 -t 60 > client_iperf.log.txt &')
+    time.sleep(10)
+    a.cmd('iperf -u -b 1000m -c 10.0.0.2 -t 30 > attacker_iperf.log.txt &')
     # net.iperf( ( a, s ), l4Type='TCP' )
     # net.iperf( ( c, s ), l4Type='TCP' )
 
