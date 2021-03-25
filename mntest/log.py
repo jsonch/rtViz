@@ -6,10 +6,12 @@ from threading import Thread, Event
 import subprocess
 import time
 import re
+import argparse
 
 
-client = "10.0.0.1"
-attacker = "10.0.0.3"
+parser = argparse.ArgumentParser()
+parser.add_argument("--client", default = None)
+parser.add_argument("--attacker", default = None)
 
 def measFlows(clientIp, attackIp):
     cmd = "./pollflows.sh"
@@ -51,8 +53,12 @@ def measLoop(clientIp, attackIp, interval = 1):
 
 
 def main():
+    args = parser.parse_args()
+    if ((args.client == None) or (args.attacker == None)):
+        print ("please specify a client and attacker address")
+        quit()
 
-    mthread = Thread(target = measLoop, args = (client, attacker))
+    mthread = Thread(target = measLoop, args = (args.client, args.attacker))
     mthread.daemon = True
     mthread.start()
     mthread.join()

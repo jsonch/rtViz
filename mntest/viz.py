@@ -24,9 +24,6 @@ parser.add_argument("--max", default = 10, help = "maximum expected traffic rate
 parser.add_argument("--thresh", default = 6, help = "threshold to consider an attack, in Gb/s")
 
 
-client = "10.0.0.1"
-attacker = "10.0.0.3"
-interval = .2 # how often to redraw the plot
 # how many b/s to observe before drawing the "attack!" box
 attack_threshold = 8**8 # 800 Mb/s
 
@@ -38,7 +35,7 @@ max_flow_rate = 10**9 # 1 Gb/s
 
 def main():
   args = parser.parse_args()
-  if ((args.client == None) and (args.attacker == None) and (args.test == False)):
+  if (((args.client == None) or (args.attacker == None)) and (args.test == False)):
     print ("error: you must either run in testmode (--test) or provide client (--client) and attacker (--attacker) IP address.")
     quit()
   print ("arguments: ")
@@ -53,7 +50,7 @@ def main():
   global attack_threshold
   attack_threshold = 10**9 * float(args.thresh)
   measQ = Queue()
-  mthread = Thread(target = measLoop, args = (client, attacker, measQ, args.i, args.test))
+  mthread = Thread(target = measLoop, args = (args.client, args.attacker, measQ, args.i, args.test))
   mthread.daemon = True
   mthread.start()
   plotLoop(measQ)
