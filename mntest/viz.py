@@ -281,7 +281,7 @@ def plot_edges(bg, fig, ax, G, rates, framenum):
 
 def plot_edge(ax, edge, rate, frame_offset):
   if (rate == 0):
-    return # don't plot edges with rate of 0
+    return [] # don't plot edges with rate of 0
   name = edge[0]
   flowtype = edge[2]['flow']
   flow_rate = rate
