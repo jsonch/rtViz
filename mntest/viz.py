@@ -38,6 +38,10 @@ def main():
   if (((args.client == None) or (args.attacker == None)) and (args.test == False)):
     print ("error: you must either run in testmode (--test) or provide client (--client) and attacker (--attacker) IP address.")
     quit()
+  if (args.client == None):
+    args.client = "10.0.0.1"
+  if (args.attacker == None):
+    args.attacker = "10.0.0.3"
   print ("arguments: ")
   print ("test mode? %s"%args.test)
   print ("client   IP: %s"%args.client)
