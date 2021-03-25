@@ -65,15 +65,19 @@ def main():
 def measLoop(clientIp, attackIp, measQ, interval = 1, test = True):    
   # measure the change in timestamp, client flow size, and attack flow size
   print ("starting flow measurement thread")
-  meas = measFlows(clientIp, attackIp)
+  if (not test):
+    meas = measFlows(clientIp, attackIp)
   time.sleep(interval)
   while (True):
-    new_meas = measFlows(clientIp, attackIp)
-    meas_delta = calcDelta(meas, new_meas)
-    meas = new_meas
-    time.sleep(interval)
+    if (not test):
+      new_meas = measFlows(clientIp, attackIp)
+      meas_delta = calcDelta(meas, new_meas)
+      meas = new_meas
+      time.sleep(interval)
     # generate random data if test mode
-    if (test):
+    else:
+      meas_delta = {}
+      meas_delta["ts"] = interval * 1000.0
       meas_delta["client_bytes"] = 1000000
       meas_delta["attack_bytes"] = 100000000
     measQ.put(meas_delta)
@@ -167,7 +171,7 @@ def runTopoPlot(measQ, G, ax, fig):
   # get the static background.
   fig.canvas.draw()
   bg = fig.canvas.copy_from_bbox(ax.bbox)
-  plt.show(False)
+  plt.show(block=False)
 
   # plot-update loop.
   fnum = 0
