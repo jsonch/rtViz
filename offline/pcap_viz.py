@@ -37,7 +37,7 @@ parser.add_argument("--min", default = 0.0, type = float, help = "minimum expect
 parser.add_argument("--min_arrow_width", default = 1.0, type = float)
 parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
-
+parser.add_argument("--node1_pcap", default=None)
 
 def check_args():
   args = parser.parse_args()
@@ -59,6 +59,7 @@ def check_args():
   args.max = args.max * 10**9
   args.thresh = args.thresh * 10**9
   return  args
+
 
 def main():
   args = check_args()
@@ -107,6 +108,25 @@ def calc_rtt(args, ip_pkt, ts):
         return results
   return []
 
+# get the first attack timestamp from the pcap.
+def get_first_attack_timestamp(args, pcapfn):
+  f = open(pcapfn, "rb")
+  pcap = dpkt.pcap.Reader(f)
+  startTs = None
+  for ts, buf in pcap:   
+    orig_ts = ts 
+    if (startTs == None):
+      startTs = ts
+      ts = 0
+    else: 
+      ts = ts - startTs
+    eth = dpkt.ethernet.Ethernet(buf)
+    if (type(eth.data) == dpkt.ip.IP):
+      ip = eth.data
+      src = socket.inet_ntoa(ip.src)
+      if (src == args.attacker):
+        return ts
+
 
 
 def measIntervals(args):
@@ -133,7 +153,7 @@ def measIntervals(args):
   iats = {ip:[] for ip in args.drones}
   # (rtt, iat)
   rtts = {ip:[] for ip in args.drones}
-
+  # process the pcap from the server.
   for ts, buf in pcap:    
     if (startTs == None):
       startTs = ts
@@ -167,8 +187,48 @@ def measIntervals(args):
         lastArrivals[src] = ts
       elif (src == attacker):
         cur_rec[src] += iplen
-  print ("saving output to: %s"%interval_rec_temp)
 
+  # process the pcap from the attacker (node1)
+  print ("adding interval records from attacker perspective.")
+  first_attack_ts_server = get_first_attack_timestamp(args, args.pcap)
+  first_attack_ts_attack = get_first_attack_timestamp(args, args.node1_pcap)
+  print ("first attack timestamp at server: %s"%first_attack_ts_server)
+  print ("first attack timestamp at node1: %s"%first_attack_ts_attack)
+  print ("node1 start +=: %s"%(first_attack_ts_server - first_attack_ts_attack))
+  node1_ts_increment = first_attack_ts_server - first_attack_ts_attack
+
+  attacker_sent_bytes = 0  
+  last_interval = None
+  f = open(args.node1_pcap, "rb")
+  pcap = dpkt.pcap.Reader(f)
+  startTs = None
+  for ts, buf in pcap:    
+    if (startTs == None):
+      startTs = ts
+      ts = 0
+    else: 
+      ts = ts - startTs
+    ts = ts + node1_ts_increment
+    interval = int(ts / idur) -1 # off by one because of timing alignment. might need to remove this to sync in a differetn run .
+    if (last_interval == None):
+      last_interval = interval
+    if (interval != last_interval):
+      intervalrecs[interval]["attacker_sent_bytes"] = attacker_sent_bytes
+      print ("t: %s attacker_bytes: %s"%(ts, attacker_sent_bytes))
+      print (intervalrecs[interval])
+      attacker_sent_bytes = 0
+      last_interval = interval
+    eth = dpkt.ethernet.Ethernet(buf)
+    if (type(eth.data) == dpkt.ip.IP):
+      ip = eth.data
+      src = socket.inet_ntoa(ip.src)
+      # TODO: check that dst is server too
+      if (src == args.attacker):
+        attacker_sent_bytes += ip.len
+  print ("done parsing attacker records.")
+
+
+  print ("saving output to: %s"%interval_rec_temp)
   pkl.dump((intervalrecs, iats, rtts), open(interval_rec_temp, "wb"))
   return intervalrecs, iats, rtts
 
@@ -217,7 +277,11 @@ flow_color = {
 
 
 def agg_bps_at(fnum, intervalrecs, interval, nodes):
-  return 8 * (sum([intervalrecs[fnum][dip] for dip in nodes])) / interval
+  return 8 * (sum([intervalrecs[fnum].get(dip, 0) for dip in nodes])) / interval
+
+def src_attack_bps_at(fnum, intervalrecs, interval, attacker):
+  bps = max(intervalrecs[fnum].get("attacker_sent_bytes", 0), intervalrecs[fnum].get(attacker, 0))
+  return 8 * bps / interval
 
 
 lasttime = 0
@@ -233,8 +297,8 @@ def get_time_and_rates_from_intervalrecs(fnum, args, intervalrecs):
   cli_to_switch = agg_bps_at(fnum, intervalrecs, args.i, args.drones)
   cli_to_server = cli_to_switch
 
-  atk_to_switch = agg_bps_at(fnum, intervalrecs, args.i, [args.attacker])
-  atk_to_server = atk_to_switch
+  atk_to_switch = src_attack_bps_at(fnum, intervalrecs, args.i, args.attacker)
+  atk_to_server = agg_bps_at(fnum, intervalrecs, args.i, [args.attacker])
 
   print ("curtime: %s cli_to_switch: %s, atk_to_switch: %s, cli_to_server: %s, atk_to_server: %s"%
   (curtime, cli_to_switch, atk_to_switch, cli_to_server, atk_to_server))
@@ -274,10 +338,50 @@ def plotIntervals(args, intervalrecs, iats, rtts):
   print ("plotting %s intervals"%len(intervalrecs))
   iat_df = iats_to_dataframe(iats)
   rtt_df = rtts_to_dataframe(rtts)
-  drawTopoAnimation(args, intervalrecs, iat_df, rtt_df)
+  # drawFrame(args, intervalrecs, iat_df, rtt_df)
+  drawFrame_vertical(args, intervalrecs, iat_df, rtt_df)
 
 # todo: add the rate plot in the same frame
-def drawTopoAnimation(args, intervalrecs, iat_df, rtt_df):
+def drawFrame_vertical(args, intervalrecs, iat_df, rtt_df):
+  fig = plt.figure(figsize=(6, 12)) 
+  gs = gridspec.GridSpec(4, 1)
+
+  ax_topo = plt.subplot(gs[0:2, :])
+  ax_topo.axis('off')
+
+  ax_drones = plt.subplot(gs[2, :])
+  ax_drones.set_ylim((0, 20))
+  ax_drones.set_xlim((0, 500))
+  ax_drones.plot([1, 2, 3], [2, 2, 2])
+
+  ax_agg = plt.subplot(gs[3, :])
+  drone_line,  = ax_agg.plot([], [], label = "drones", color = "b")
+  attack_line,  = ax_agg.plot([], [], label = "attacker", color = "r", linestyle = "-.")
+  ax_agg.set_yscale("log")
+  ax_agg.legend(loc = "upper left")
+  ax_agg.set_xlabel("time (seconds)")
+  ax_agg.set_ylabel("(log) bit rate")
+  agg_lines = (drone_line, attack_line)
+  ax_agg.set_ylim((.5, 5*(10**9)+10**10))
+
+  plt.tight_layout()
+
+  axes = (ax_topo, ax_drones, ax_agg)
+
+  # call animator
+  ani = animation.FuncAnimation(fig, animateFig,
+    # frames=len(intervalrecs), 
+    frames=10,
+    interval = int(args.i*1000), blit = True, fargs=(args, intervalrecs, G, axes, fig, agg_lines, iat_df, rtt_df))
+  out_fn = args.pcap+".plot.vertical.html"
+  print ("saving to file: %s"%out_fn)
+  matplotlib.rcParams["animation.bitrate"]=1000
+  open(out_fn, "w").write(ani.to_html5_video())
+  # ani.save(args.out_fn, writer = "imagemagick")
+  # plt.show() # don't show the plot in real time.
+  return
+
+def drawFrame(args, intervalrecs, iat_df, rtt_df):
   # left pane: ax_topo
   # right pane, top: ax_drones
   # right pane, bottom: ax_agg
@@ -339,7 +443,7 @@ def animateTopoAx(fnum, args, intervalrecs, G, ax, fig):
   artists+=stat_artists
   artists+=edge_artists
   artists+=node_artists
-  if (rates[frozenset(("Attacker", "Server"))] > args.thresh):
+  if (rates[frozenset(("Attacker", "Switch"))] > args.thresh):
     alert_artists = plot_alert(args, fig, ax)
     artists+=alert_artists
 
@@ -532,6 +636,77 @@ def bps_to_num_pts (args, rate):
     num_pts = num_pts * 2
 
   return int(num_pts)
+
+
+# temporary dataframe.
+temp_df_fn = "trace.df"
+
+
+
+# dataframe-based approach
+def parse_recs_raw(pcapfn, location):
+  recs = []
+  f = open(pcapfn, "rb")
+  pcap = dpkt.pcap.Reader(f)
+  for idx, (ts, buf) in enumerate(pcap):
+    eth = dpkt.ethernet.Ethernet(buf)
+    if (type(eth.data) == dpkt.ip.IP):
+      ip = eth.data
+      src = socket.inet_ntoa(ip.src)
+      dst = socket.inet_ntoa(ip.dst)
+      proto = ip.p
+      seq = None
+      ack = None
+      sport = None
+      dport = None
+      if (type(ip.data) == dpkt.tcp.TCP):
+        tcp = ip.data
+        seq = tcp.seq
+        ack = tcp.ack
+        sport = tcp.sport
+        dport = tcp.dport
+      recs.append({
+        "location":location,
+        "ts":ts,
+        "len":ip.len,
+        "src":src,
+        "dst":dst,
+        "proto":proto,
+        "seq":seq,
+        "ack":ack,
+        "sport":sport,
+        "dport":dport
+        })
+    if (idx % 100000 == 0):
+      print ("parsing %s at ts: %s"%(pcapfn, ts))
+  return recs
+
+
+
+def pcaps_to_df(args):
+  if( (not args.recalc) and ((os.path.isfile(temp_df_fn)))):
+    print ("loading from: %s"%temp_df_fn)
+    return pd.read_pickle(temp_df_fn)
+  else:
+    server_pcapfn = args.pcap
+    attacker_pcapfn = args.node1_pcap
+    server_recs = parse_recs_raw(server_pcapfn, "server")
+    attacker_recs = parse_recs_raw(attacker_pcapfn, "attacker")
+    df = pd.DataFrame(server_recs+attacker_recs)
+    print ("saving to: %s"%temp_df_fn)
+    pd.to_pickle(df, temp_df_fn)
+    return df
+def df_main():
+  args = check_args()
+  # convert trace into a dataframe
+  trace_df = pcaps_to_df(args)
+  # make plots.
+  # plotIntervals(args, trace_df)
+
+
+def sync_df_ts(df):
+  # sync timestamps in trace from node1 and node2
+  return df
 
 
 
