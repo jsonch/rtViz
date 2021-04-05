@@ -14,6 +14,7 @@ import pickle as pkl
 import matplotlib.image as mpimg
 from matplotlib import gridspec
 from matplotlib.ticker import MaxNLocator
+import matplotlib.image as mpimg
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -41,11 +42,11 @@ parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
 parser.add_argument("--node1_pcap", default=None)
 
-num_frames = 100
-fnum_offset = 515
+num_frames = 200
+fnum_offset = 500
 
-# num_frames = 100000
-# fnum_offset = 0
+num_frames = 100000
+fnum_offset = 0
 
 
 def check_args():
@@ -238,26 +239,47 @@ def processPcap(args):
 # network graph
 G = nx.MultiDiGraph()
 G.add_node('Attacker', color = 'red')
-G.add_node('Switch', color = 'grey')
+G.add_node('Pronto Fabric', color = 'grey')
 G.add_node('Drones', color = 'blue')
 G.add_node('Server', color = 'blue')
-G.add_edge('Drones', 'Switch', color = 'blue', flow='good')
-G.add_edge('Attacker', 'Switch', color = 'red', flow='bad')
-G.add_edge('Switch', 'Server', color = 'blue', flow='good')
-G.add_edge('Switch', 'Server', color = 'red', flow='bad')
+G.add_edge('Drones', 'Pronto Fabric', color = 'blue', flow='good')
+G.add_edge('Attacker', 'Pronto Fabric', color = 'red', flow='bad')
+G.add_edge('Pronto Fabric', 'Server', color = 'blue', flow='good')
+G.add_edge('Pronto Fabric', 'Server', color = 'red', flow='bad')
 
 next_hop = {
-  "Attacker":"Switch",
-  "Drones":"Switch",
-  "Switch":"Server"
+  "Attacker":"Pronto Fabric",
+  "Drones":"Pronto Fabric",
+  "Pronto Fabric":"Server"
 }
 
 node_pos = {
   "Attacker":[-.75, -.75],
   "Drones":[-.75, .75],
-  "Switch":[0, 0],
+  "Pronto Fabric":[0, 0],
   "Server":[.75, 0]
 }
+
+node_image = {
+  "Attacker" : "icons/Attacker.png",
+  "Drones" : "icons/Drones.png",
+  "Pronto Fabric" : "icons/Switch.png",
+  "Server" : "icons/Server.png"
+}
+node_image_scale = {
+  "Attacker" : 0.075,
+  "Drones" : 0.075,
+  "Pronto Fabric" : 0.075,
+  "Server" : 0.075
+}
+node_label_y_offset = {
+  "Attacker" : 0.3,
+  "Drones" : 0.2,
+  "Pronto Fabric" : 0.2,
+  "Server" : 0.2
+  
+}
+
 flow_offset = {
   "good":0,
   "bad":0
@@ -305,7 +327,11 @@ def setup_rate_pane(ax):
   set_agg_lims(ax)
 
 def setup_topo_pane(ax):
-  ax.axis('off')
+  ax.set_xlim((-1, 1))
+  ax.set_ylim((-1, 1))
+  # ax.axis('off')
+  ax.set_xticks([])
+  ax.set_yticks([])
 
 def setup_drone_pane(ax):
   ax.set_ylim((0, 20))
@@ -328,12 +354,13 @@ def right_shift_ax(ax):
 def vertical_init():
   # initialization for vertical layout 
   fig = plt.figure(figsize=(6, 12)) 
+  fig.set_dpi(250)
   # gs = gridspec.GridSpec(4, 1, figure=fig)
   # gs.update(wspace=0.025, hspace=0.2) # set the spacing between axes. 
 
   outer_gs = gridspec.GridSpec(2, 1)
   hspace = .3
-  lb = 0.01
+  lb = 0.02
   ub = 1.0 - lb
   outer_gs.update(wspace = 0, hspace = .1, top = ub, bottom = lb, right = ub, left = lb)
   topo_gs = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer_gs[0], hspace = 0, wspace = 0)
@@ -365,12 +392,13 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
   ani = animation.FuncAnimation(fig, animateFig,
     # frames=len(intervalrecs), 
     frames=min(num_frames, len(intervalrecs)),
-    interval = int(args.i*1000), blit = True, fargs=(args, G,
+    interval = int(args.i*1000), blit = False, fargs=(args, G,
       intervalrecs, rtt_df, interval_df, fig, axes)
     )
   out_fn = args.pcap+".plot.vertical.html"
   matplotlib.rcParams["animation.bitrate"]=1000
   out_bin = ani.to_html5_video()
+  # out_bin = ani.to_jshtml()
   print ("saving to file: %s"%out_fn)
   open(out_fn, "w").write(out_bin)
   # ani.save(args.out_fn, writer = "imagemagick")
@@ -381,6 +409,8 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
 def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes):
   print ("FRAME %s"%fnum)
   fnum = fnum + fnum_offset # FOR TESTING!
+  if (fnum >= len(intervalrecs)):
+    return
   (ax_topo, ax_drones, ax_agg) = axes
   topo_artists = animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax_topo, fig)
   agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, fig)
@@ -393,8 +423,8 @@ def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes):
 
 def get_cur_from_rate_df(interval_df, i):
   rates = {
-  frozenset(("Drones", "Switch")):interval_df.drone_tx[i],
-  frozenset(("Attacker", "Switch")):interval_df.atk_tx[i],
+  frozenset(("Drones", "Pronto Fabric")):interval_df.drone_tx[i],
+  frozenset(("Attacker", "Pronto Fabric")):interval_df.atk_tx[i],
   frozenset(("Drones", "Server")):interval_df.drone_rx[i],
   frozenset(("Attacker", "Server")):interval_df.atk_rx[i]
   }
@@ -404,8 +434,7 @@ def get_cur_from_rate_df(interval_df, i):
 def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   curtime, rates = get_cur_from_rate_df(interval_df, fnum)
   ax.clear()
-  ax.set_xlim((-1, 1))
-  ax.set_ylim((-1, 1))
+  setup_topo_pane(ax)  
   artists = []
   edge_artists = plot_edges(args, fig, ax, G, rates, fnum)
   node_artists = plot_nodes(args, fig, ax, G)
@@ -413,36 +442,67 @@ def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   # artists+=stat_artists
   artists+=edge_artists
   artists+=node_artists
-  if (rates[frozenset(("Attacker", "Switch"))] > args.thresh):
-    alert_artists = plot_alert(args, fig, ax)
-    artists+=alert_artists
+
+  attacker_key = frozenset(("Attacker", "Pronto Fabric"))
+  effect_key = frozenset(("Attacker", "Server"))
+  attacker_rate = rates[attacker_key]
+  effect_rate = rates[effect_key]
+  # report when the attack is blocked.
+  if ((attacker_rate > 0) and (effect_rate == 0)):
+    report_artists = plot_block_report(args, fig, ax)
+    artists += report_artists
+
+
+  # if (rates[frozenset(("Attacker", "Pronto Fabric"))] > args.thresh):
+  #   alert_artists = plot_alert(args, fig, ax)
+  #   artists+=alert_artists
 
   return artists
 
 
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+
+def plot_node_icon(fig, ax, node):
+  node_name = node[0]
+  # plot an icon of a node, return the artist.
+  fn = node_image[node_name]
+  im = mpimg.imread(fn)
+  print ("node: %s"%node_name)
+  print ("fn: %s"%fn)
+
+  (x,y) = node_pos[node_name]
+  oi = OffsetImage(im, zoom = node_image_scale[node_name])
+  box = AnnotationBbox(oi, (x, y), frameon=False)
+  ax.add_artist(box)
+  a = ax.text(x-.1, y+node_label_y_offset[node_name], node_name)
+
+  return box
+
 def plot_nodes(args, fig, ax, G):
   artists = []
   for node in G.nodes(data=True):
-    a = nx.draw_networkx_nodes(
-      G, 
-      node_pos, 
-      [node[0]], 
-      # node_color=node[1]['color'], 
-      linewidths=5,
-      edgecolors=node[1]['color'],
-      node_color="white",
-      ax = ax, 
-      node_size=2500,
-      node_shape = "s"
-    )
+    a = plot_node_icon(fig, ax, node)
     artists.append(a)
-  ldict = nx.draw_networkx_labels(G, pos=node_pos, ax=ax)
-  return (artists+list(ldict.values()))
-
+    # a = nx.draw_networkx_nodes(
+    #   G, 
+    #   node_pos, 
+    #   [node[0]], 
+    #   # node_color=node[1]['color'], 
+    #   linewidths=5,
+    #   edgecolors=node[1]['color'],
+    #   node_color="white",
+    #   ax = ax, 
+    #   node_size=2500,
+    #   node_shape = "s"
+    # )
+    # artists.append(a)
+  # ldict = nx.draw_networkx_labels(G, pos=node_pos, ax=ax)
+  # artists = artists + list(ldict.values())
+  return artists
 
 def get_edge_key(edge):
   edge_key = frozenset((edge[0], edge[1]))
-  if (edge[0]=='Switch' and edge[1] == 'Server'):
+  if (edge[0]=='Pronto Fabric' and edge[1] == 'Server'):
     if (edge[2]['flow']=='bad'):
       edge_key = frozenset(("Attacker", "Server"))
     else:
@@ -529,26 +589,33 @@ def bps_to_num_pts (args, rate):
   return int(num_pts)
 
 def plot_stats(args, fig, ax, rates):
-  cli_rate = rates[frozenset(("Drones", "Switch"))]/float(10**6)
-  atk_rate = rates[frozenset(("Attacker", "Switch"))]/float(10**6)
+  cli_rate = rates[frozenset(("Drones", "Pronto Fabric"))]/float(10**6)
+  atk_rate = rates[frozenset(("Attacker", "Pronto Fabric"))]/float(10**6)
   rectangles = {
     "Drones rate:\n%.2f Mb/s"%cli_rate : mpatch.Rectangle((-.26, .75), .5, .25, linewidth=1, edgecolor='k', color="grey"),
     "Attack rate:\n%.2f Mb/s"%atk_rate : mpatch.Rectangle((.25, .75), .5, .25, linewidth=1, edgecolor='k', color="grey")
   }
   return plot_rectangles(ax, rectangles, "k")
 
+def plot_block_report(args, fig, ax):
+  x, y = node_pos["Pronto Fabric"]
+  y = y - .4
+  x = x
+  rectangles = {'Attack\nBlocked!' : mpatch.Rectangle((x, y), .5, .20, linewidth=1, edgecolor='g', facecolor='g')}
+  return plot_rectangles(ax, rectangles, "w")
+
 def plot_alert(args, fig, ax):
-  rectangles = {'Attack!' : mpatch.Rectangle((.25, -.5), .5, .20, linewidth=1, edgecolor='r', color='r')}
+  rectangles = {'Attack!' : mpatch.Rectangle((.25, -.5), .5, .20, linewidth=1, edgecolor='r', facecolor='r')}
   return plot_rectangles(ax, rectangles, "w")
 
 
 def plot_rectangles(ax, rectangles, fontcolor):
   artists = []
   for r in rectangles:
-    a = ax.add_artist(rectangles[r])
     rx, ry = rectangles[r].get_xy()
     cx = rx + rectangles[r].get_width()/2.0
     cy = ry + rectangles[r].get_height()/2.0
+    a = ax.add_artist(rectangles[r])
     an = ax.annotate(r, (cx, cy), color=fontcolor, weight='bold', 
           fontsize=12, ha='center', va='center')
     artists.append(a)
