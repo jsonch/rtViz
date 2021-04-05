@@ -39,6 +39,13 @@ parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
 parser.add_argument("--node1_pcap", default=None)
 
+num_frames = 10
+fnum_offset = 535
+
+# num_frames = 100000
+# fnum_offset = 0
+
+
 def check_args():
   args = parser.parse_args()
   if (len(args.drones) != 5):
@@ -63,8 +70,8 @@ def check_args():
 
 def main():
   args = check_args()
-  intervalrecs, iats, rtts= measIntervals(args)
-  plotIntervals(args, intervalrecs, iats, rtts)
+  intervalrecs, rtt_df = processPcap(args)
+  drawDashboard(args, intervalrecs, rtt_df)
 
 def newRec(ts, drone_ips, attacker_ip):
   rec = {ip:0 for ip in drone_ips}
@@ -72,41 +79,41 @@ def newRec(ts, drone_ips, attacker_ip):
   rec['ts']=ts
   return rec
 
-def printIntervalRec(intervalrec, iats):
+def printIntervalRec(intervalrec):
   for (ip, stat) in intervalrec.items():
     print("%s: %s"%(ip, stat))
-  # print ("---iat standard deviation ----")
-  # for (ip, pts) in iats.items():
-  #   tses, iatlist = zip(*pts)
-  #   print("%s: %s"%(ip, np.std(iatlist[-10::])))
-  # print ("-------")
 
 
-send_times = {}
+class RttCalc(object):
+  def __init__(self, monitored_ips):
+    self.monitored_ips = monitored_ips
+    self.send_times = {ip:[] for ip in self.monitored_ips}
+    self.rtt_trace = []
 
-def calc_rtt(args, ip_pkt, ts):
-  global send_times
-  src = socket.inet_ntoa(ip_pkt.src)
-  dst = socket.inet_ntoa(ip_pkt.dst)
+  def calc_rtt(self, ip_pkt, ts):
+    src = socket.inet_ntoa(ip_pkt.src)
+    dst = socket.inet_ntoa(ip_pkt.dst)
+    if (type(ip_pkt.data) == dpkt.tcp.TCP):
+      tcp = ip_pkt.data
+      if (dst in self.monitored_ips):
+          self.send_times[dst].append((ts, tcp.seq))
+      if (src in self.monitored_ips):
+          remaining = []
+          for (send_ts, seq) in self.send_times[src]:
+            if (tcp.ack > seq):
+              rtt = ts - send_ts
+              self.rtt_trace.append({
+                "ts":ts,
+                "rtt":rtt,
+                "drone":src
+                })
+            else:
+              remaining.append((send_ts, seq))
+          self.send_times[src] = remaining
+  def get_df(self):
+    print("returning RTT dataframe with %i entries"%(len(self.rtt_trace)))
+    return pd.DataFrame(self.rtt_trace)
 
-  if (send_times == {}):
-    send_times = {ip:[] for ip in args.drones}
-  if (type(ip_pkt.data) == dpkt.tcp.TCP):
-    tcp = ip_pkt.data
-    if (dst in args.drones):
-        send_times[dst].append((ts, tcp.seq))
-    if (src in args.drones):
-        results = []
-        remaining = []
-        for (send_ts, seq) in send_times[src]:
-          if (tcp.ack > seq):
-            rtt = ts - send_ts
-            results.append((ts, rtt))
-          else:
-            remaining.append((send_ts, seq))
-        send_times[src] = remaining
-        return results
-  return []
 
 # get the first attack timestamp from the pcap.
 def get_first_attack_timestamp(args, pcapfn):
@@ -127,19 +134,7 @@ def get_first_attack_timestamp(args, pcapfn):
       if (src == args.attacker):
         return ts
 
-
-
-def measIntervals(args):
-  drones, attacker, idur, pcapfn\
-  = args.drones, args.attacker, args.i, args.pcap
-  interval_rec_temp = args.pcap+".recs.pkl"
-  if( (not args.recalc) and ((os.path.isfile(interval_rec_temp)))):
-    print ("loading interval records and iats from: %s"%interval_rec_temp)
-    intervalrecs, iats, rtts = pkl.load(open(interval_rec_temp, "rb"))
-    return intervalrecs, iats, rtts
-  else:
-    print ("generating interval records and iats and saving to: %s"%interval_rec_temp)
-  # parse the pcap and convert it into interval counter records of attack and drone traffic
+def processServerPcap(pcapfn, idur, drones, attacker):
   intervalrecs = []
   last_interval = 0
   cur_rec = newRec(0, drones, attacker)
@@ -147,12 +142,7 @@ def measIntervals(args):
   pcap = dpkt.pcap.Reader(f)
   startTs = None
 
-  lastArrivals = {ip:0 for ip in args.drones}
-  lastArrivals[args.attacker] = 0
-  # (timestamp, iat)
-  iats = {ip:[] for ip in args.drones}
-  # (rtt, iat)
-  rtts = {ip:[] for ip in args.drones}
+  rttCalc = RttCalc(drones)
   # process the pcap from the server.
   for ts, buf in pcap:    
     if (startTs == None):
@@ -162,44 +152,35 @@ def measIntervals(args):
       ts = ts - startTs
     interval = int(ts / idur)
     if (interval != last_interval):
-      rtts_len = 0
-      for (k, v) in rtts.items():
-        rtts_len += len(v)
-      print ("rtts_len: %s"%rtts_len)
-      print ("t: %s"%ts)
-      printIntervalRec(cur_rec, iats)
+      printIntervalRec(cur_rec)
       intervalrecs.append(cur_rec)
       cur_rec = newRec(ts, drones, attacker)
       last_interval = interval
     eth = dpkt.ethernet.Ethernet(buf)
     if (type(eth.data) == dpkt.ip.IP):
       ip = eth.data
+      rttCalc.calc_rtt(ip, ts)
       src = socket.inet_ntoa(ip.src)
-
-      new_rtts = calc_rtt(args, ip, ts)
-      if new_rtts != []:
-        rtts[src]+=new_rtts
       iplen = ip.len
       if (src in drones):
         cur_rec[src] += iplen
-        iat = ts - lastArrivals[src]
-        iats[src].append((ts, iat))
-        lastArrivals[src] = ts
       elif (src == attacker):
         cur_rec[src] += iplen
+  return intervalrecs, rttCalc.get_df()
 
-  # process the pcap from the attacker (node1)
-  print ("adding interval records from attacker perspective.")
+def get_node1_ts_offset(args):
   first_attack_ts_server = get_first_attack_timestamp(args, args.pcap)
   first_attack_ts_attack = get_first_attack_timestamp(args, args.node1_pcap)
   print ("first attack timestamp at server: %s"%first_attack_ts_server)
   print ("first attack timestamp at node1: %s"%first_attack_ts_attack)
   print ("node1 start +=: %s"%(first_attack_ts_server - first_attack_ts_attack))
   node1_ts_increment = first_attack_ts_server - first_attack_ts_attack
+  return node1_ts_increment
 
+def processAttackerPcap(pcapfn, idur, attacker, node1_ts_increment, intervalrecs):
   attacker_sent_bytes = 0  
   last_interval = None
-  f = open(args.node1_pcap, "rb")
+  f = open(pcapfn, "rb")
   pcap = dpkt.pcap.Reader(f)
   startTs = None
   for ts, buf in pcap:    
@@ -223,14 +204,31 @@ def measIntervals(args):
       ip = eth.data
       src = socket.inet_ntoa(ip.src)
       # TODO: check that dst is server too
-      if (src == args.attacker):
+      if (src == attacker):
         attacker_sent_bytes += ip.len
   print ("done parsing attacker records.")
+  return intervalrecs
 
+def processPcap(args):
+  interval_rec_temp = args.pcap+".recs.pkl"
+  if( (not args.recalc) and ((os.path.isfile(interval_rec_temp)))):
+    print ("loading interval records and rtt_df from: %s"%interval_rec_temp)
+    intervalrecs, rtt_df = pkl.load(open(interval_rec_temp, "rb"))
+    return intervalrecs, rtt_df
+  else:
+    print ("generating interval records and rtt_df and saving to: %s"%interval_rec_temp)
+
+  # process the pcap from the server 
+  intervalrecs, rtt_df = processServerPcap(args.pcap, args.i, args.drones, args.attacker)
+
+  # process the pcap from the attacker (node1) to augment intervalrecs
+  print ("adding interval records from attacker perspective.")
+  attacker_ts_increment = get_node1_ts_offset(args)
+  intervalrecs = processAttackerPcap(args.node1_pcap, args.i, args.attacker, attacker_ts_increment, intervalrecs)
 
   print ("saving output to: %s"%interval_rec_temp)
-  pkl.dump((intervalrecs, iats, rtts), open(interval_rec_temp, "wb"))
-  return intervalrecs, iats, rtts
+  pkl.dump((intervalrecs, rtt_df), open(interval_rec_temp, "wb"))
+  return intervalrecs, rtt_df
 
 
 ### Plotting 
@@ -252,10 +250,6 @@ next_hop = {
   "Switch":"Server"
 }
 
-# for i in range(5):
-#   G.add_node("Drone%s"%i, color = 'blue')
-#   next_hop["Drone%s"%i] = "Switch"
-
 node_pos = {
   "Attacker":[-.75, -.75],
   "Drones":[-.75, .75],
@@ -275,74 +269,35 @@ flow_color = {
   "bad":"red"
 }
 
+# finish processing the rate dataframe
+def add_topo_rate_cols(rate_df, drone_ips, atk_ip):
+  agg_drone_ct = rate_df[drone_ips].sum(axis=1)
+  interval = np.average(rate_df.diff().ts[1:-1])
+  agg_drone_rate = (agg_drone_ct / interval) * 8.0
+  
+  rate_df['drone_tx'] = agg_drone_rate
+  rate_df['drone_rx'] = agg_drone_rate
+  rate_df['atk_tx'] = (rate_df["attacker_sent_bytes"] / interval) * 8.0
+  rate_df['atk_rx'] = (rate_df[atk_ip] / interval) * 8.0
+  return rate_df.fillna(0)
 
-def agg_bps_at(fnum, intervalrecs, interval, nodes):
-  return 8 * (sum([intervalrecs[fnum].get(dip, 0) for dip in nodes])) / interval
-
-def src_attack_bps_at(fnum, intervalrecs, interval, attacker):
-  bps = max(intervalrecs[fnum].get("attacker_sent_bytes", 0), intervalrecs[fnum].get(attacker, 0))
-  return 8 * bps / interval
-
-
-lasttime = 0
-def get_time_and_rates_from_intervalrecs(fnum, args, intervalrecs):
-  global lasttime
-  rec = intervalrecs[fnum]
-  print (rec)
-  curtime = rec['ts'] + args.i
-  print ("curtime: %s lasttime: %s"%(curtime, lasttime))
-  dur = curtime - lasttime  
-  lasttime = rec['ts']
-
-  cli_to_switch = agg_bps_at(fnum, intervalrecs, args.i, args.drones)
-  cli_to_server = cli_to_switch
-
-  atk_to_switch = src_attack_bps_at(fnum, intervalrecs, args.i, args.attacker)
-  atk_to_server = agg_bps_at(fnum, intervalrecs, args.i, [args.attacker])
-
-  print ("curtime: %s cli_to_switch: %s, atk_to_switch: %s, cli_to_server: %s, atk_to_server: %s"%
-  (curtime, cli_to_switch, atk_to_switch, cli_to_server, atk_to_server))
-  rates = {
-  frozenset(("Drones", "Switch")):cli_to_switch,
-  frozenset(("Attacker", "Switch")):atk_to_switch,
-  frozenset(("Drones", "Server")):cli_to_server,
-  frozenset(("Attacker", "Server")):atk_to_server
-  }
-  return curtime, rates
+def df_of_intervalrecs(intervalrecs):
+  return pd.DataFrame(intervalrecs)
 
 
-def iats_to_dataframe(iats):
-  recs = []
-  for (key, vals) in iats.items():
-    for (ts, iat) in vals:
-      recs.append({
-        "ts":ts,
-        "iat":iat,
-        "drone":key
-        })
-  return pd.DataFrame(recs)
-
-def rtts_to_dataframe(rtts):
-  recs = []
-  for (key, vals) in rtts.items():
-    for (ts, rtt) in vals:
-      recs.append({
-        "ts":ts,
-        "rtt":rtt,
-        "drone":key
-        })
-  return pd.DataFrame(recs)
-
-
-def plotIntervals(args, intervalrecs, iats, rtts):
+def drawDashboard(args, intervalrecs, rtt_df):
   print ("plotting %s intervals"%len(intervalrecs))
-  iat_df = iats_to_dataframe(iats)
-  rtt_df = rtts_to_dataframe(rtts)
-  # drawFrame(args, intervalrecs, iat_df, rtt_df)
-  drawFrame_vertical(args, intervalrecs, iat_df, rtt_df)
+  interval_df = df_of_intervalrecs(intervalrecs)
+  interval_df = add_topo_rate_cols(interval_df, args.drones, args.attacker)
+  # drawFrame(args, intervalrecs, rtt_df)
+  drawFrame_vertical(args, intervalrecs, rtt_df, interval_df)
 
-# todo: add the rate plot in the same frame
-def drawFrame_vertical(args, intervalrecs, iat_df, rtt_df):
+def set_agg_lims(ax):
+  ax.set_ylim((.5, 5*(10**12)))
+
+
+def vertical_init():
+  # initialization for vertical layout 
   fig = plt.figure(figsize=(6, 12)) 
   gs = gridspec.GridSpec(4, 1)
 
@@ -362,77 +317,61 @@ def drawFrame_vertical(args, intervalrecs, iat_df, rtt_df):
   ax_agg.set_xlabel("time (seconds)")
   ax_agg.set_ylabel("(log) bit rate")
   agg_lines = (drone_line, attack_line)
-  ax_agg.set_ylim((.5, 5*(10**9)+10**10))
+  set_agg_lims(ax_agg)
 
   plt.tight_layout()
 
   axes = (ax_topo, ax_drones, ax_agg)
+  return fig, axes, agg_lines
 
+
+# todo: add the rate plot in the same frame
+def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
+  fig, axes, agg_lines = vertical_init()
   # call animator
   ani = animation.FuncAnimation(fig, animateFig,
     # frames=len(intervalrecs), 
-    frames=10,
-    interval = int(args.i*1000), blit = True, fargs=(args, intervalrecs, G, axes, fig, agg_lines, iat_df, rtt_df))
+    frames=min(num_frames, len(intervalrecs)),
+    interval = int(args.i*1000), blit = True, fargs=(args, G,
+      intervalrecs, rtt_df, interval_df, fig, axes, agg_lines)
+    )
   out_fn = args.pcap+".plot.vertical.html"
-  print ("saving to file: %s"%out_fn)
   matplotlib.rcParams["animation.bitrate"]=1000
-  open(out_fn, "w").write(ani.to_html5_video())
+  out_bin = ani.to_html5_video()
+  print ("saving to file: %s"%out_fn)
+  open(out_fn, "w").write(out_bin)
   # ani.save(args.out_fn, writer = "imagemagick")
   # plt.show() # don't show the plot in real time.
   return
 
-def drawFrame(args, intervalrecs, iat_df, rtt_df):
-  # left pane: ax_topo
-  # right pane, top: ax_drones
-  # right pane, bottom: ax_agg
-  fig = plt.figure(figsize=(12, 6)) 
-  gs = gridspec.GridSpec(2, 10)
 
-  ax_topo = plt.subplot(gs[:, 0:5])
-  ax_topo.axis('off')
-
-  ax_drones = plt.subplot(gs[0, 5:10])
-  ax_drones.set_ylim((0, 20))
-  ax_drones.set_xlim((0, 500))
-  ax_drones.plot([1, 2, 3], [2, 2, 2])
-
-  ax_agg = plt.subplot(gs[1, 5:10])
-  drone_line,  = ax_agg.plot([], [], label = "drones", color = "b")
-  attack_line,  = ax_agg.plot([], [], label = "attacker", color = "r", linestyle = "-.")
-  ax_agg.set_yscale("log")
-  ax_agg.legend(loc = "upper left")
-  ax_agg.set_xlabel("time (seconds)")
-  ax_agg.set_ylabel("(log) bit rate")
-  agg_lines = (drone_line, attack_line)
-  ax_agg.set_ylim((.5, 5*(10**9)+10**10))
-
-  plt.tight_layout()
-
-  axes = (ax_topo, ax_drones, ax_agg)
-
-  # call animator
-  ani = animation.FuncAnimation(fig, animateFig,
-    frames=len(intervalrecs), 
-    # frames=10,
-    interval = int(args.i*1000), blit = True, fargs=(args, intervalrecs, G, axes, fig, agg_lines, iat_df, rtt_df))
-  out_fn = args.pcap+".plot.html"
-  print ("saving to file: %s"%out_fn)
-  matplotlib.rcParams["animation.bitrate"]=1000
-  open(out_fn, "w").write(ani.to_html5_video())
-  # ani.save(args.out_fn, writer = "imagemagick")
-  # plt.show() # don't show the plot in real time.
-  return
-
-def animateFig(fnum, args, intervalrecs, G, axes, fig, agg_lines, iat_df, rtt_df):
+def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes, agg_lines):
   print ("FRAME %s"%fnum)
+  fnum = fnum + fnum_offset # FOR TESTING!
   (ax_topo, ax_drones, ax_agg) = axes
-  topo_artists = animateTopoAx(fnum, args, intervalrecs, G, ax_topo, fig)
-  agg_artists = animateAggAx(fnum, args, intervalrecs, G, ax_agg, fig, agg_lines)
-  drone_artists = animateDroneAx(fnum, args, intervalrecs, G, ax_drones, fig, iat_df, rtt_df)
+  topo_artists = animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax_topo, fig)
+  agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, fig, agg_lines)
+  drone_artists = animateDroneAx(fnum, args, intervalrecs, G, ax_drones, fig, rtt_df)
   return topo_artists + agg_artists
 
-def animateTopoAx(fnum, args, intervalrecs, G, ax, fig):
-  curtime, rates = get_time_and_rates_from_intervalrecs(fnum, args, intervalrecs)
+# =====================================
+# =           topology pane           =
+# =====================================
+
+def get_cur_from_rate_df(interval_df, i):
+  rates = {
+  frozenset(("Drones", "Switch")):interval_df.drone_tx[i],
+  frozenset(("Attacker", "Switch")):interval_df.atk_tx[i],
+  frozenset(("Drones", "Server")):interval_df.drone_rx[i],
+  frozenset(("Attacker", "Server")):interval_df.atk_rx[i]
+  }
+  print (rates)
+  return interval_df.ts[i], rates
+
+
+
+def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
+  curtime, rates = get_cur_from_rate_df(interval_df, fnum)
   ax.clear()
   ax.set_xlim((-1, 1))
   ax.set_ylim((-1, 1))
@@ -447,89 +386,6 @@ def animateTopoAx(fnum, args, intervalrecs, G, ax, fig):
     alert_artists = plot_alert(args, fig, ax)
     artists+=alert_artists
 
-  return artists
-
-
-# animate a plot that shows drone connection quality. 
-def animateDroneAx(fnum, args, intervalrecs, G, ax, fig, iat_df, rtt_df):
-  iat_window = 100
-  cur_ts = fnum * args.i
-  ax.clear()
-  # samples = iat_df[iat_df["ts"]<cur_ts]["iat"][-20:]
-  # ax.hist(samples*1000)
-  # ax.set_ylim((0, 20))
-  # ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-  # ax.set_xlim((0, 500))
-  # ax.set_xlabel("drone packet inter-arrival time (ms)")
-  # ax.set_ylabel("count")
-
-
-
-  samples = rtt_df[rtt_df["ts"]<cur_ts]["rtt"][-20:]
-  ax.hist(samples*1000)
-  ax.set_ylim((0, 20))
-  ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-  ax.set_xlim((0, 500))
-  ax.set_xlabel("drone control round trip time (ms)")
-  ax.set_ylabel("count")
-
-  return []
-
-
-
-# animate aggregate throughput plot. 
-agg_x = []
-agg_drone_y = []
-agg_attack_y = []
-def animateAggAx(fnum, args, intervalrecs, G, ax, fig, agg_lines):
-  global agg_x, agg_drone_y, agg_attack_y
-  (drone_line, attack_line) = agg_lines
-
-  drone_agg_rate = agg_bps_at(fnum, intervalrecs, args.i, args.drones)
-  attack_rate = agg_bps_at(fnum, intervalrecs, args.i, [args.attacker]) +1
-  print ("AGG -- drone: %s attacker: %s"%(drone_agg_rate, attack_rate))
-
-  if (agg_x == []):
-    agg_x = [args.i]
-  else:
-    agg_x.append(agg_x[-1]+args.i)
-  agg_drone_y.append(drone_agg_rate)
-  agg_attack_y.append(attack_rate)
-
-  drone_line.set_data(agg_x, agg_drone_y)
-  attack_line.set_data(agg_x, agg_attack_y)
-  ax.autoscale()
-  ax.relim()
-  ax.set_ylim((.5, 5*(10**9)+10**10))
-
-  return [drone_line, attack_line]
-
-
-def plot_stats(args, fig, ax, rates):
-  cli_rate = rates[frozenset(("Drones", "Switch"))]/float(10**6)
-  atk_rate = rates[frozenset(("Attacker", "Switch"))]/float(10**6)
-  rectangles = {
-    "Drones rate:\n%.2f Mb/s"%cli_rate : mpatch.Rectangle((-.26, .75), .5, .25, linewidth=1, edgecolor='k', color="grey"),
-    "Attack rate:\n%.2f Mb/s"%atk_rate : mpatch.Rectangle((.25, .75), .5, .25, linewidth=1, edgecolor='k', color="grey")
-  }
-  return plot_rectangles(ax, rectangles, "k")
-
-def plot_alert(args, fig, ax):
-  rectangles = {'Attack!' : mpatch.Rectangle((.25, -.5), .5, .20, linewidth=1, edgecolor='r', color='r')}
-  return plot_rectangles(ax, rectangles, "w")
-
-
-def plot_rectangles(ax, rectangles, fontcolor):
-  artists = []
-  for r in rectangles:
-    a = ax.add_artist(rectangles[r])
-    rx, ry = rectangles[r].get_xy()
-    cx = rx + rectangles[r].get_width()/2.0
-    cy = ry + rectangles[r].get_height()/2.0
-    an = ax.annotate(r, (cx, cy), color=fontcolor, weight='bold', 
-          fontsize=12, ha='center', va='center')
-    artists.append(a)
-    artists.append(an)
   return artists
 
 
@@ -551,28 +407,28 @@ def plot_nodes(args, fig, ax, G):
     artists.append(a)
   ldict = nx.draw_networkx_labels(G, pos=node_pos, ax=ax)
   return (artists+list(ldict.values()))
-  # for pt in artists+list(ldict.values()):
-  #     ax.draw_artist(pt)
+
+
+def get_edge_key(edge):
+  edge_key = frozenset((edge[0], edge[1]))
+  if (edge[0]=='Switch' and edge[1] == 'Server'):
+    if (edge[2]['flow']=='bad'):
+      edge_key = frozenset(("Attacker", "Server"))
+    else:
+      edge_key = frozenset(("Drones", "Server"))
+  return edge_key
 
 
 def plot_edges(args, fig, ax, G, rates, framenum):
   # draw each edge individually. 
   all_artists = []
   for edge in G.edges(data=True):
-    edge_key = frozenset((edge[0], edge[1]))
-    if (edge[0]=='Switch' and edge[1] == 'Server'):
-      if (edge[2]['flow']=='bad'):
-        edge_key = frozenset(("Attacker", "Server"))
-      else:
-        edge_key = frozenset(("Drones", "Server"))
-    rate = rates[edge_key]
+    edge_key = get_edge_key(edge)
+    rate = rates.get(edge_key, 0)
+    # mod 2 * .5 is the per-frame offset for the movement animation.
     artists = plot_edge(args, ax, edge, rate, (framenum%2*.5))
     all_artists += artists
   return all_artists
-  # draw new points
-  # for pt in all_pts:
-  #   ax.draw_artist(pt)
-
 
 def plot_edge(args, ax, edge, rate, frame_offset):
   if (rate == 0):
@@ -580,18 +436,12 @@ def plot_edge(args, ax, edge, rate, frame_offset):
   name = edge[0]
   flowtype = edge[2]['flow']
   flow_rate = rate
-  cur_pos = copy.copy(node_pos[name])
-  next_pos = copy.copy(node_pos[next_hop[name]] )   
-  cur_pos[1] = cur_pos[1] + flow_align_offset[flowtype]
-  next_pos[1] = next_pos[1] + flow_align_offset[flowtype]
-
-  cur_pos = np.array(cur_pos)
-  next_pos = np.array(next_pos)
-
+  # positioning and size
+  cur_pos, next_pos = cur_pos_of(name, flowtype)
   direction = direction_of(cur_pos, next_pos)
   num_pts = bps_to_num_pts(args, rate)
-
   pt_width = bps_to_arrow_width(args, rate)
+
   vec = interp_vec_of(cur_pos, next_pos, flow_offset[flowtype] + frame_offset, num_pts)
   artists = []
   for pt in vec:
@@ -601,6 +451,16 @@ def plot_edge(args, ax, edge, rate, frame_offset):
       width = pt_width
     ))
   return artists
+
+def cur_pos_of(name, flowtype):
+  cur_pos = copy.copy(node_pos[name])
+  next_pos = copy.copy(node_pos[next_hop[name]] )   
+  cur_pos[1] = cur_pos[1] + flow_align_offset[flowtype]
+  next_pos[1] = next_pos[1] + flow_align_offset[flowtype]
+
+  cur_pos = np.array(cur_pos)
+  next_pos = np.array(next_pos)
+  return cur_pos, next_pos
 
 def direction_of(cur_pos, next_pos): 
   direction = [next_pos[i] - cur_pos[i] for i in range(len(cur_pos))]
@@ -637,13 +497,171 @@ def bps_to_num_pts (args, rate):
 
   return int(num_pts)
 
+def plot_stats(args, fig, ax, rates):
+  cli_rate = rates[frozenset(("Drones", "Switch"))]/float(10**6)
+  atk_rate = rates[frozenset(("Attacker", "Switch"))]/float(10**6)
+  rectangles = {
+    "Drones rate:\n%.2f Mb/s"%cli_rate : mpatch.Rectangle((-.26, .75), .5, .25, linewidth=1, edgecolor='k', color="grey"),
+    "Attack rate:\n%.2f Mb/s"%atk_rate : mpatch.Rectangle((.25, .75), .5, .25, linewidth=1, edgecolor='k', color="grey")
+  }
+  return plot_rectangles(ax, rectangles, "k")
+
+def plot_alert(args, fig, ax):
+  rectangles = {'Attack!' : mpatch.Rectangle((.25, -.5), .5, .20, linewidth=1, edgecolor='r', color='r')}
+  return plot_rectangles(ax, rectangles, "w")
+
+
+def plot_rectangles(ax, rectangles, fontcolor):
+  artists = []
+  for r in rectangles:
+    a = ax.add_artist(rectangles[r])
+    rx, ry = rectangles[r].get_xy()
+    cx = rx + rectangles[r].get_width()/2.0
+    cy = ry + rectangles[r].get_height()/2.0
+    an = ax.annotate(r, (cx, cy), color=fontcolor, weight='bold', 
+          fontsize=12, ha='center', va='center')
+    artists.append(a)
+    artists.append(an)
+  return artists
+
+
+# ======  End of topology pane  =======
+
+# ======================================
+# =           drone rtt pane           =
+# ======================================
+
+
+# animate a plot that shows drone connection quality. 
+def animateDroneAx(fnum, args, intervalrecs, G, ax, fig, rtt_df):
+  cur_ts = fnum * args.i
+  ax.clear()
+
+  samples = rtt_df[rtt_df["ts"]<cur_ts]["rtt"][-20:]
+  ax.hist(samples*1000)
+  ax.set_ylim((0, 20))
+  ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+  ax.set_xlim((0, 500))
+  ax.set_xlabel("drone control round trip time (ms)")
+  ax.set_ylabel("count")
+
+  return []
+
+
+# ======  End of drone rtt pane  =======
+
+
+# =======================================
+# =           throughput pane           =
+# =======================================
+
+# animate aggregate throughput plot. 
+agg_x = []
+agg_drone_y = []
+agg_attack_y = []
+
+# current attack state machine
+atk_sm = {
+  "active":False,
+  "start":0
+}
+
+# attack intervals (start time:end time)
+atk_intervals = {}
+def update_atk_intervals(cur_atk_rx, cur_ts):
+  global atk_sm, atk_intervals
+  prev_sm = copy.copy(atk_sm)
+  # update the state machine.
+  if (not atk_sm["active"]):
+    if (cur_atk_rx > 0):
+      atk_sm["active"] = True
+      atk_sm["start"] = cur_ts
+  else:
+    if (cur_atk_rx == 0):
+      atk_sm["active"] = False
+      atk_sm["start"] = 0
+
+  # if an attack is ongoing or just completed, 
+  # update the attack records 
+  if (prev_sm["active"] or atk_sm["active"]):
+    atk_start = max(prev_sm["start"], atk_sm["start"])
+    atk_end = max(atk_start, cur_ts)
+    atk_intervals[atk_start] = atk_end
+
+
+def overlay_attacks(ax, interval):
+  # box: 
+  # observed attack duration: X ms
+  # arrow to first 
+  global atk_intervals
+  artists = []
+  for t_start, t_end in atk_intervals.items():
+    t_dur = (t_end - t_start) + interval
+    t_dur_ms = int(t_dur * 1000)
+    alertstr = "DoS duration: %i ms"%t_dur_ms
+    a = ax.annotate(
+      alertstr, 
+      xy=(t_start, 10**10), 
+      xytext=(t_start, 10**12),
+      arrowprops=dict(facecolor='red', shrink = 0.05)
+    )
+    # a = ax.text(t_start, 10**11, , color = "red")
+    artists.append(a)
+  return artists
+
+def setup_rate_pane(ax):
+  ax.set_yscale("log")
+  ax.set_xlabel("time (seconds)")
+  ax.set_ylabel("(log) bit rate")
+  set_agg_lims(ax)
+
+
+def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig, agg_lines):
+  ax.clear()
+  global agg_x, agg_drone_y, agg_attack_y
+
+  cur_ts = interval_df.ts[fnum]
+  interval = np.average(interval_df.diff().ts[1:-1])
+  drone_agg_rate = interval_df.drone_rx[fnum]
+  attack_rate = interval_df.atk_rx[fnum]
+  print ("AGG -- drone: %s attacker: %s"%(drone_agg_rate, attack_rate))
+
+  global atk_intervals
+  prev_atk_intervals = copy.copy(atk_intervals)
+  update_atk_intervals(attack_rate, cur_ts)
+  if (prev_atk_intervals != atk_intervals):
+    print ("new attack detected!")
+    print (atk_intervals)
+
+  agg_x.append(cur_ts)
+  agg_drone_y.append(drone_agg_rate + 1)
+  agg_attack_y.append(attack_rate + 1)
+
+  # clear and redraw
+  ax.clear()
+  setup_rate_pane(ax)
+  drone_line,  = ax.plot(agg_x, agg_drone_y, label = "drones", color = "b")
+  attack_line,  = ax.plot(agg_x, agg_attack_y, label = "attacker", color = "r", linestyle = "-.")
+  ax.legend(loc = "upper left")
+
+
+  artists = overlay_attacks(ax, interval)
+
+  ax.autoscale()
+  ax.relim()
+  set_agg_lims(ax)
+
+  return [drone_line, attack_line]+artists
+
+# ======  End of throughput pane  =======
+
+
+
+# dataframe-based revision -- not used, no time
 
 # temporary dataframe.
 temp_df_fn = "trace.df"
 
-
-
-# dataframe-based approach
 def parse_recs_raw(pcapfn, location):
   recs = []
   f = open(pcapfn, "rb")
