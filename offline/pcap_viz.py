@@ -42,11 +42,15 @@ parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
 parser.add_argument("--node1_pcap", default=None)
 
-num_frames = 200
-fnum_offset = 500
 
-num_frames = 100000
-fnum_offset = 0
+defense = False
+
+if defense:
+  num_frames = 200
+  fnum_offset = 490
+else:
+  num_frames = 10000
+  fnum_offset = 0
 
 
 def check_args():
@@ -241,42 +245,42 @@ G = nx.MultiDiGraph()
 G.add_node('Attacker', color = 'red')
 G.add_node('Pronto Fabric', color = 'grey')
 G.add_node('Drones', color = 'blue')
-G.add_node('Server', color = 'blue')
+G.add_node('Drone Controller', color = 'blue')
 G.add_edge('Drones', 'Pronto Fabric', color = 'blue', flow='good')
 G.add_edge('Attacker', 'Pronto Fabric', color = 'red', flow='bad')
-G.add_edge('Pronto Fabric', 'Server', color = 'blue', flow='good')
-G.add_edge('Pronto Fabric', 'Server', color = 'red', flow='bad')
+G.add_edge('Pronto Fabric', 'Drone Controller', color = 'blue', flow='good')
+G.add_edge('Pronto Fabric', 'Drone Controller', color = 'red', flow='bad')
 
 next_hop = {
   "Attacker":"Pronto Fabric",
   "Drones":"Pronto Fabric",
-  "Pronto Fabric":"Server"
+  "Pronto Fabric":"Drone Controller"
 }
 
 node_pos = {
-  "Attacker":[-.75, -.75],
-  "Drones":[-.75, .75],
+  "Attacker":[-.70, -.70],
+  "Drones":[-.70, .70],
   "Pronto Fabric":[0, 0],
-  "Server":[.75, 0]
+  "Drone Controller":[.75, 0]
 }
 
 node_image = {
-  "Attacker" : "icons/Attacker.png",
-  "Drones" : "icons/Drones.png",
-  "Pronto Fabric" : "icons/Switch.png",
-  "Server" : "icons/Server.png"
+  "Attacker" : "icons/Attacker_cloud.png",
+  "Drones" : "icons/Drones_cloud.png",
+  "Pronto Fabric" : "icons/Switch_cloud.png",
+  "Drone Controller" : "icons/Server_cloud.png"
 }
 node_image_scale = {
   "Attacker" : 0.075,
   "Drones" : 0.075,
   "Pronto Fabric" : 0.075,
-  "Server" : 0.075
+  "Drone Controller" : 0.075
 }
 node_label_y_offset = {
   "Attacker" : 0.3,
-  "Drones" : 0.2,
-  "Pronto Fabric" : 0.2,
-  "Server" : 0.2
+  "Drones" : -0.35,
+  "Pronto Fabric" : 0.3,
+  "Drone Controller" : 0.3
   
 }
 
@@ -407,8 +411,8 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
 
 
 def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes):
-  print ("FRAME %s"%fnum)
   fnum = fnum + fnum_offset # FOR TESTING!
+  print ("FRAME %s"%fnum)
   if (fnum >= len(intervalrecs)):
     return
   (ax_topo, ax_drones, ax_agg) = axes
@@ -425,8 +429,8 @@ def get_cur_from_rate_df(interval_df, i):
   rates = {
   frozenset(("Drones", "Pronto Fabric")):interval_df.drone_tx[i],
   frozenset(("Attacker", "Pronto Fabric")):interval_df.atk_tx[i],
-  frozenset(("Drones", "Server")):interval_df.drone_rx[i],
-  frozenset(("Attacker", "Server")):interval_df.atk_rx[i]
+  frozenset(("Drones", "Drone Controller")):interval_df.drone_rx[i],
+  frozenset(("Attacker", "Drone Controller")):interval_df.atk_rx[i]
   }
   print (rates)
   return interval_df.ts[i], rates
@@ -444,7 +448,7 @@ def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   artists+=node_artists
 
   attacker_key = frozenset(("Attacker", "Pronto Fabric"))
-  effect_key = frozenset(("Attacker", "Server"))
+  effect_key = frozenset(("Attacker", "Drone Controller"))
   attacker_rate = rates[attacker_key]
   effect_rate = rates[effect_key]
   # report when the attack is blocked.
@@ -502,11 +506,11 @@ def plot_nodes(args, fig, ax, G):
 
 def get_edge_key(edge):
   edge_key = frozenset((edge[0], edge[1]))
-  if (edge[0]=='Pronto Fabric' and edge[1] == 'Server'):
+  if (edge[0]=='Pronto Fabric' and edge[1] == 'Drone Controller'):
     if (edge[2]['flow']=='bad'):
-      edge_key = frozenset(("Attacker", "Server"))
+      edge_key = frozenset(("Attacker", "Drone Controller"))
     else:
-      edge_key = frozenset(("Drones", "Server"))
+      edge_key = frozenset(("Drones", "Drone Controller"))
   return edge_key
 
 
@@ -599,7 +603,7 @@ def plot_stats(args, fig, ax, rates):
 
 def plot_block_report(args, fig, ax):
   x, y = node_pos["Pronto Fabric"]
-  y = y - .4
+  y = y - .5
   x = x
   rectangles = {'Attack\nBlocked!' : mpatch.Rectangle((x, y), .5, .20, linewidth=1, edgecolor='g', facecolor='g')}
   return plot_rectangles(ax, rectangles, "w")
@@ -693,10 +697,11 @@ def overlay_attacks(ax, interval):
     t_dur = max(t_end - t_start, interval) # attacks are at least 1 interval.
     t_dur_ms = int(t_dur * 1000)
     alertstr = "Observed attack\nduration: %i ms"%t_dur_ms
+    x_pos = max(t_end-3, t_start)
     a = ax.annotate(
       alertstr, 
-      xy=(t_end-.2, 10), 
-      xytext=(t_end-.2, .001),
+      xy=(x_pos, 10), 
+      xytext=(x_pos-1, .001),
       color = "red",
       fontweight = "bold",
       arrowprops=dict(facecolor='red', shrink = 0.05, edgecolor = 'red'),
