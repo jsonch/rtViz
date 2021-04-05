@@ -17,6 +17,8 @@ from matplotlib.ticker import MaxNLocator
 
 import matplotlib
 import matplotlib.pyplot as plt
+# plt.rcParams['figure.constrained_layout.use'] = True
+
 import networkx as nx
 import numpy as np
 from matplotlib import animation
@@ -39,8 +41,8 @@ parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
 parser.add_argument("--node1_pcap", default=None)
 
-num_frames = 10
-fnum_offset = 535
+num_frames = 100
+fnum_offset = 515
 
 # num_frames = 100000
 # fnum_offset = 0
@@ -295,45 +297,76 @@ def drawDashboard(args, intervalrecs, rtt_df):
 def set_agg_lims(ax):
   ax.set_ylim((.5, 5*(10**12)))
 
+def setup_rate_pane(ax):
+  ax.set_yscale("log")
+  ax.set_xlabel("time (seconds)")
+  ax.set_ylabel("(log) bit rate")
+  ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+  set_agg_lims(ax)
+
+def setup_topo_pane(ax):
+  ax.axis('off')
+
+def setup_drone_pane(ax):
+  ax.set_ylim((0, 20))
+  ax.set_xlim((0, 500))
+  ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+  ax.set_xlabel("drone control round trip time (ms)")
+  ax.set_ylabel("count")
+
+
+def right_shift_ax(ax):
+  box = ax.get_position()
+  box.x0 = box.x0 + 0.11
+  # box.x1 = box.x1 + 0.05
+  box.y0 = box.y0 + 0.03
+  box.y1 = box.y1 + 0.03
+  ax.set_position(box)
+  return ax
+
 
 def vertical_init():
   # initialization for vertical layout 
   fig = plt.figure(figsize=(6, 12)) 
-  gs = gridspec.GridSpec(4, 1)
+  # gs = gridspec.GridSpec(4, 1, figure=fig)
+  # gs.update(wspace=0.025, hspace=0.2) # set the spacing between axes. 
 
-  ax_topo = plt.subplot(gs[0:2, :])
-  ax_topo.axis('off')
+  outer_gs = gridspec.GridSpec(2, 1)
+  hspace = .3
+  lb = 0.01
+  ub = 1.0 - lb
+  outer_gs.update(wspace = 0, hspace = .1, top = ub, bottom = lb, right = ub, left = lb)
+  topo_gs = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer_gs[0], hspace = 0, wspace = 0)
+  line_gs = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec = outer_gs[1], hspace=hspace)
+  # topo plot
+  ax_topo = plt.subplot(topo_gs[0])
+  setup_topo_pane(ax_topo)
+  # rate plot 
+  ax_agg = plt.subplot(line_gs[0])
+  setup_rate_pane(ax_agg)  
+  ax_agg = right_shift_ax(ax_agg)
 
-  ax_drones = plt.subplot(gs[2, :])
-  ax_drones.set_ylim((0, 20))
-  ax_drones.set_xlim((0, 500))
-  ax_drones.plot([1, 2, 3], [2, 2, 2])
 
-  ax_agg = plt.subplot(gs[3, :])
-  drone_line,  = ax_agg.plot([], [], label = "drones", color = "b")
-  attack_line,  = ax_agg.plot([], [], label = "attacker", color = "r", linestyle = "-.")
-  ax_agg.set_yscale("log")
-  ax_agg.legend(loc = "upper left")
-  ax_agg.set_xlabel("time (seconds)")
-  ax_agg.set_ylabel("(log) bit rate")
-  agg_lines = (drone_line, attack_line)
-  set_agg_lims(ax_agg)
+  # rtt plot
+  ax_drones = plt.subplot(line_gs[1])
+  setup_drone_pane(ax_drones)
+  ax_drones = right_shift_ax(ax_drones)
 
-  plt.tight_layout()
+  # plt.tight_layout()
 
   axes = (ax_topo, ax_drones, ax_agg)
-  return fig, axes, agg_lines
+  return fig, axes
 
 
 # todo: add the rate plot in the same frame
 def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
-  fig, axes, agg_lines = vertical_init()
+  fig, axes = vertical_init()
   # call animator
   ani = animation.FuncAnimation(fig, animateFig,
     # frames=len(intervalrecs), 
     frames=min(num_frames, len(intervalrecs)),
     interval = int(args.i*1000), blit = True, fargs=(args, G,
-      intervalrecs, rtt_df, interval_df, fig, axes, agg_lines)
+      intervalrecs, rtt_df, interval_df, fig, axes)
     )
   out_fn = args.pcap+".plot.vertical.html"
   matplotlib.rcParams["animation.bitrate"]=1000
@@ -345,12 +378,12 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
   return
 
 
-def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes, agg_lines):
+def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes):
   print ("FRAME %s"%fnum)
   fnum = fnum + fnum_offset # FOR TESTING!
   (ax_topo, ax_drones, ax_agg) = axes
   topo_artists = animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax_topo, fig)
-  agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, fig, agg_lines)
+  agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, fig)
   drone_artists = animateDroneAx(fnum, args, intervalrecs, G, ax_drones, fig, rtt_df)
   return topo_artists + agg_artists
 
@@ -368,8 +401,6 @@ def get_cur_from_rate_df(interval_df, i):
   print (rates)
   return interval_df.ts[i], rates
 
-
-
 def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   curtime, rates = get_cur_from_rate_df(interval_df, fnum)
   ax.clear()
@@ -378,8 +409,8 @@ def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   artists = []
   edge_artists = plot_edges(args, fig, ax, G, rates, fnum)
   node_artists = plot_nodes(args, fig, ax, G)
-  stat_artists  = plot_stats(args, fig, ax, rates)
-  artists+=stat_artists
+  # stat_artists  = plot_stats(args, fig, ax, rates)
+  # artists+=stat_artists
   artists+=edge_artists
   artists+=node_artists
   if (rates[frozenset(("Attacker", "Switch"))] > args.thresh):
@@ -537,13 +568,9 @@ def animateDroneAx(fnum, args, intervalrecs, G, ax, fig, rtt_df):
   cur_ts = fnum * args.i
   ax.clear()
 
+  setup_drone_pane(ax)
   samples = rtt_df[rtt_df["ts"]<cur_ts]["rtt"][-20:]
   ax.hist(samples*1000)
-  ax.set_ylim((0, 20))
-  ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-  ax.set_xlim((0, 500))
-  ax.set_xlabel("drone control round trip time (ms)")
-  ax.set_ylabel("count")
 
   return []
 
@@ -596,27 +623,27 @@ def overlay_attacks(ax, interval):
   global atk_intervals
   artists = []
   for t_start, t_end in atk_intervals.items():
-    t_dur = (t_end - t_start) + interval
+    t_dur = max(t_end - t_start, interval) # attacks are at least 1 interval.
     t_dur_ms = int(t_dur * 1000)
-    alertstr = "DoS duration: %i ms"%t_dur_ms
+    alertstr = "Observed attack\nduration: %i ms"%t_dur_ms
     a = ax.annotate(
       alertstr, 
-      xy=(t_start, 10**10), 
-      xytext=(t_start, 10**12),
-      arrowprops=dict(facecolor='red', shrink = 0.05)
+      xy=(t_end-.2, 10), 
+      xytext=(t_end-.2, .001),
+      color = "red",
+      fontweight = "bold",
+      arrowprops=dict(facecolor='red', shrink = 0.05, edgecolor = 'red'),
+      bbox=dict(facecolor='white', alpha=1.0, edgecolor = "red")      
     )
-    # a = ax.text(t_start, 10**11, , color = "red")
+
+    # a = ax.text(t_end-1, .001, alertstr, color = "red")
     artists.append(a)
   return artists
 
-def setup_rate_pane(ax):
-  ax.set_yscale("log")
-  ax.set_xlabel("time (seconds)")
-  ax.set_ylabel("(log) bit rate")
-  set_agg_lims(ax)
 
+max_window = 10
 
-def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig, agg_lines):
+def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   ax.clear()
   global agg_x, agg_drone_y, agg_attack_y
 
@@ -647,8 +674,12 @@ def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig, agg_lines):
 
   artists = overlay_attacks(ax, interval)
 
-  ax.autoscale()
-  ax.relim()
+  # ax.autoscale()
+  # ax.relim()
+  max_x = np.max(agg_x)
+  min_x = max(np.min(agg_x), max_x - max_window)
+  ax.set_xlim((min_x, max_x))
+
   set_agg_lims(ax)
 
   return [drone_line, attack_line]+artists
