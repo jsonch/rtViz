@@ -11,13 +11,22 @@ import dpkt
 import socket
 import os.path
 import pickle as pkl
+
+
+import matplotlib
+import matplotlib.pyplot as plt
+
+font = {'family' : 'normal',
+        'weight' : 'bold',
+        'size'   : 15}
+
+matplotlib.rc('font', **font)
+
 import matplotlib.image as mpimg
 from matplotlib import gridspec
 from matplotlib.ticker import MaxNLocator
 import matplotlib.image as mpimg
 
-import matplotlib
-import matplotlib.pyplot as plt
 # plt.rcParams['figure.constrained_layout.use'] = True
 
 import networkx as nx
@@ -33,28 +42,29 @@ parser.add_argument("--attacker", default = '10.64.5.130')
 parser.add_argument("--pcap", default = None)
 # parameters that should not have to be set for current demo.
 parser.add_argument("-i", default = .2, type = float)
-parser.add_argument("--max", default = 5.0, type = float, help = "maximum expected traffic rate, in Gb/s")
-parser.add_argument("--thresh", default = 4.0, type = float, help = "threshold to consider an attack, in Gb/s")
+parser.add_argument("--max", default = 10.0, type = float, help = "maximum expected traffic rate, in Gb/s")
+parser.add_argument("--thresh", default = 6.0, type = float, help = "threshold to consider an attack, in Gb/s")
 # parameters that should never have to change.
-parser.add_argument("--min", default = 0.0, type = float, help = "minimum expected traffic rate (gb/s)")
+parser.add_argument("--min", default = 0, type = float, help = "minimum expected traffic rate (gb/s)")
 parser.add_argument("--min_arrow_width", default = 1.0, type = float)
 parser.add_argument("--max_arrow_width", default = 5.0, type = float)
 parser.add_argument("--recalc", default = False, action = "store_true",  help = "recalculate counters?")
 parser.add_argument("--node1_pcap", default=None)
+parser.add_argument("--defense_run",action = "store_true",  default = False, help = "is the defense system enabled?")
+# 
+defense_run = None
+
+node1_offset = .6
 
 
-defense = False
-
-if defense:
-  num_frames = 200
-  fnum_offset = 490
-else:
-  num_frames = 10000
-  fnum_offset = 0
+num_frames = 100000
+fnum_offset = 0
 
 
 def check_args():
   args = parser.parse_args()
+  global defense_run
+  defense_run = args.defense_run
   if (len(args.drones) != 5):
     print ("error: must provide the ip of all 5 drones")
     quit()
@@ -197,7 +207,7 @@ def processAttackerPcap(pcapfn, idur, attacker, node1_ts_increment, intervalrecs
     else: 
       ts = ts - startTs
     ts = ts + node1_ts_increment
-    interval = int(ts / idur) -1 # off by one because of timing alignment. might need to remove this to sync in a differetn run .
+    interval = int(ts / idur) # -1 # off by one because of timing alignment. might need to remove this to sync in a differetn run .
     if (last_interval == None):
       last_interval = interval
     if (interval != last_interval):
@@ -230,7 +240,8 @@ def processPcap(args):
 
   # process the pcap from the attacker (node1) to augment intervalrecs
   print ("adding interval records from attacker perspective.")
-  attacker_ts_increment = get_node1_ts_offset(args)
+  attacker_ts_increment = 0.4 # final run, timestamps are almost syncd
+  # attacker_ts_increment = get_node1_ts_offset(args)
   intervalrecs = processAttackerPcap(args.node1_pcap, args.i, args.attacker, attacker_ts_increment, intervalrecs)
 
   print ("saving output to: %s"%interval_rec_temp)
@@ -271,18 +282,24 @@ node_image = {
   "Drone Controller" : "icons/Server_cloud.png"
 }
 node_image_scale = {
-  "Attacker" : 0.075,
-  "Drones" : 0.075,
-  "Pronto Fabric" : 0.075,
-  "Drone Controller" : 0.075
+  "Attacker" : 0.06,
+  "Drones" : 0.06,
+  "Pronto Fabric" : 0.06,
+  "Drone Controller" : 0.06
 }
 node_label_y_offset = {
   "Attacker" : 0.3,
-  "Drones" : -0.35,
-  "Pronto Fabric" : 0.3,
-  "Drone Controller" : 0.3
-  
+  "Drones" : -0.3,
+  "Pronto Fabric" : 0.30,
+  "Drone Controller" : -0.40  
 }
+node_label_text = {
+  "Attacker" : "Attacker",
+  "Drones" : "Drones",
+  "Pronto Fabric" : "Pronto Fabric",
+  "Drone Controller" : "Drone\nController"
+}
+
 
 flow_offset = {
   "good":0,
@@ -318,17 +335,32 @@ def drawDashboard(args, intervalrecs, rtt_df):
   interval_df = df_of_intervalrecs(intervalrecs)
   interval_df = add_topo_rate_cols(interval_df, args.drones, args.attacker)
   # drawFrame(args, intervalrecs, rtt_df)
-  drawFrame_vertical(args, intervalrecs, rtt_df, interval_df)
+  drawFrame_horizontal(args, intervalrecs, rtt_df, interval_df)
+  # drawFrame_vertical(args, intervalrecs, rtt_df, interval_df)
 
 def set_agg_lims(ax):
   ax.set_ylim((.5, 5*(10**12)))
 
-def setup_rate_pane(ax):
+import matplotlib.ticker as ticker
+
+def setup_rate_pane(ax, ax2):
   ax.set_yscale("log")
   ax.set_xlabel("time (seconds)")
-  ax.set_ylabel("(log) bit rate")
+  ax.set_ylabel("drone traffic rate (log b/s)")
+  ax.yaxis.label.set_color("blue")
   ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-  set_agg_lims(ax)
+  ax.set_ylim((10**4, 10**7))
+
+  scale_y = 1000000000 # Gb/s
+  ticks_y = ticker.FuncFormatter(lambda x, pos: '{0:g}'.format(x/scale_y))
+  ax2.yaxis.set_major_formatter(ticks_y)
+  ax2.yaxis.label.set_color("red")
+
+  # ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
+  ax2.set_ylabel("attack traffic rate (Gb/s)")
+  # ax2.set_yscale("log")
+  ax2.set_ylim((10**9, 10**10))
+
 
 def setup_topo_pane(ax):
   ax.set_xlim((-1, 1))
@@ -341,16 +373,21 @@ def setup_drone_pane(ax):
   ax.set_ylim((0, 20))
   ax.set_xlim((0, 500))
   ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-  ax.set_xlabel("drone control round trip time (ms)")
+  ax.set_xlabel("drone control round-trip latency (ms)")
   ax.set_ylabel("count")
 
 
 def right_shift_ax(ax):
+  # return ax # FOR HORIZONTAL QUICK
   box = ax.get_position()
-  box.x0 = box.x0 + 0.11
+  box.x0 = box.x0 -  0.02
+  box.x1 = box.x1 -  0.02
+  box.y0 = box.y0 +  0.04
+  # box.y1 = box.y1 +  0.1
+  # box.x1 = box.x1 - 0.11
   # box.x1 = box.x1 + 0.05
-  box.y0 = box.y0 + 0.03
-  box.y1 = box.y1 + 0.03
+  # box.y0 = box.y0 + 0.03
+  # box.y1 = box.y1 + 0.03
   ax.set_position(box)
   return ax
 
@@ -358,23 +395,25 @@ def right_shift_ax(ax):
 def vertical_init():
   # initialization for vertical layout 
   fig = plt.figure(figsize=(6, 12)) 
-  fig.set_dpi(250)
+  fig.set_dpi(100)
   # gs = gridspec.GridSpec(4, 1, figure=fig)
   # gs.update(wspace=0.025, hspace=0.2) # set the spacing between axes. 
 
   outer_gs = gridspec.GridSpec(2, 1)
-  hspace = .3
+  hspace = 0
   lb = 0.02
   ub = 1.0 - lb
-  outer_gs.update(wspace = 0, hspace = .1, top = ub, bottom = lb, right = ub, left = lb)
+  outer_gs.update(wspace = 0, hspace = 0, top = ub, bottom = lb, right = ub, left = lb)
   topo_gs = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer_gs[0], hspace = 0, wspace = 0)
-  line_gs = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec = outer_gs[1], hspace=hspace)
+  line_gs = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec = outer_gs[1], hspace=0, wspace = 0)
+
   # topo plot
   ax_topo = plt.subplot(topo_gs[0])
   setup_topo_pane(ax_topo)
   # rate plot 
   ax_agg = plt.subplot(line_gs[0])
-  setup_rate_pane(ax_agg)  
+  ax_agg2 = ax_agg.twinx()
+  setup_rate_pane(ax_agg, ax_agg2)  
   ax_agg = right_shift_ax(ax_agg)
 
 
@@ -385,7 +424,7 @@ def vertical_init():
 
   # plt.tight_layout()
 
-  axes = (ax_topo, ax_drones, ax_agg)
+  axes = (ax_topo, ax_drones, ax_agg, ax_agg2)
   return fig, axes
 
 
@@ -401,6 +440,7 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
     )
   out_fn = args.pcap+".plot.vertical.html"
   matplotlib.rcParams["animation.bitrate"]=1000
+
   out_bin = ani.to_html5_video()
   # out_bin = ani.to_jshtml()
   print ("saving to file: %s"%out_fn)
@@ -410,14 +450,73 @@ def drawFrame_vertical(args, intervalrecs, rtt_df, interval_df):
   return
 
 
+def horizontal_init():
+  # initialization for vertical layout 
+  fig = plt.figure(figsize=(12, 6)) 
+  fig.set_dpi(250)
+  # gs = gridspec.GridSpec(4, 1, figure=fig)
+  # gs.update(wspace=0.025, hspace=0.2) # set the spacing between axes. 
+
+  # change these for horizontal
+  outer_gs = gridspec.GridSpec(1, 2)
+  hspace = .3
+  lb = 0.05
+  ub = 1.0 - lb
+  outer_gs.update(wspace = .2, hspace = .2, top = ub, bottom = .07, right = ub, left = 0.01)
+  topo_gs = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer_gs[0])#, hspace = 0, wspace = 0)
+  line_gs = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec = outer_gs[1])#, hspace=hspace)
+
+
+  # topo plot
+  ax_topo = plt.subplot(topo_gs[0])
+  setup_topo_pane(ax_topo)
+  # rate plot 
+  ax_agg = plt.subplot(line_gs[0])
+  ax_agg2 = ax_agg.twinx()
+  setup_rate_pane(ax_agg, ax_agg2)  
+  ax_agg = right_shift_ax(ax_agg)
+
+
+  # rtt plot
+  ax_drones = plt.subplot(line_gs[1])
+  setup_drone_pane(ax_drones)
+  ax_drones = right_shift_ax(ax_drones)
+
+  # plt.tight_layout()
+
+  axes = (ax_topo, ax_drones, ax_agg, ax_agg2)
+  return fig, axes
+
+
+def drawFrame_horizontal(args, intervalrecs, rtt_df, interval_df):
+  fig, axes = horizontal_init()
+  # call animator
+  ani = animation.FuncAnimation(fig, animateFig,
+    # frames=len(intervalrecs), 
+    frames=min(num_frames, len(intervalrecs)),
+    interval = int(args.i*1000), blit = False, fargs=(args, G,
+      intervalrecs, rtt_df, interval_df, fig, axes)
+    )
+  out_fn = args.pcap+".plot.horizontal.html"
+  matplotlib.rcParams["animation.bitrate"]=1000
+  out_bin = ani.to_html5_video()
+  # out_bin = ani.to_jshtml()
+  print ("saving to file: %s"%out_fn)
+  open(out_fn, "w").write(out_bin)
+  # ani.save(args.out_fn, writer = "imagemagick")
+  # plt.show() # don't show the plot in real time.
+  return
+
+
+
 def animateFig(fnum, args, G, intervalrecs, rtt_df, interval_df, fig, axes):
   fnum = fnum + fnum_offset # FOR TESTING!
   print ("FRAME %s"%fnum)
   if (fnum >= len(intervalrecs)):
     return
-  (ax_topo, ax_drones, ax_agg) = axes
+  (ax_topo, ax_drones, ax_agg, ax_agg2) = axes
   topo_artists = animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax_topo, fig)
-  agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, fig)
+  agg_artists = animateAggAx(fnum, args, intervalrecs, interval_df, G, ax_agg, ax_agg2, fig)
   drone_artists = animateDroneAx(fnum, args, intervalrecs, G, ax_drones, fig, rtt_df)
   return topo_artists + agg_artists
 
@@ -451,10 +550,13 @@ def animateTopoAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   effect_key = frozenset(("Attacker", "Drone Controller"))
   attacker_rate = rates[attacker_key]
   effect_rate = rates[effect_key]
-  # report when the attack is blocked.
-  if ((attacker_rate > 0) and (effect_rate == 0)):
-    report_artists = plot_block_report(args, fig, ax)
-    artists += report_artists
+  # we are in the block state if the attacker rate is non-zero AND
+  # the effect rate is less than 3/4 of the attack rate
+  # (3/4 is semi-arbitrary. The constant varies.)
+  if ((attacker_rate > 1000000) and effect_rate < (.75 * attacker_rate)):
+    if (defense_run):
+      report_artists = plot_block_report(args, fig, ax)
+      artists += report_artists
 
 
   # if (rates[frozenset(("Attacker", "Pronto Fabric"))] > args.thresh):
@@ -478,7 +580,7 @@ def plot_node_icon(fig, ax, node):
   oi = OffsetImage(im, zoom = node_image_scale[node_name])
   box = AnnotationBbox(oi, (x, y), frameon=False)
   ax.add_artist(box)
-  a = ax.text(x-.1, y+node_label_y_offset[node_name], node_name)
+  a = ax.text(x-.25, y+node_label_y_offset[node_name], node_label_text[node_name])
 
   return box
 
@@ -568,11 +670,20 @@ def interp_vec_of(cur_pos, next_pos, offset, n):
   for i in range(n):      
     vec.append(cur_pos + (i+offset)*delta)
   return vec
-      
+ 
+import math     
 def bps_to_arrow_width (args, rate):
+
   pt_width = ((float(rate) / args.max) * (args.max_arrow_width - args.min_arrow_width)) + args.min_arrow_width
-  pt_width = (pt_width) * .005
-  return pt_width
+  if ((rate < 25000) or (rate > 5000000000)):
+    pt_width = ((float(rate) / args.max) * (args.max_arrow_width - args.min_arrow_width)) + args.min_arrow_width
+  else:
+    # this is for blocked attack traffic...
+    pt_width = ((float(rate) / args.max) * (args.max_arrow_width/2 - args.min_arrow_width)) + args.min_arrow_width
+
+
+  # pt_width = ((float(rate) / args.max) * (args.max_arrow_width - args.min_arrow_width)) + args.min_arrow_width
+  return pt_width * .005
 
 def bps_to_num_pts (args, rate):
   min_log_rate = 4
@@ -585,9 +696,9 @@ def bps_to_num_pts (args, rate):
   # bad: 4
   # attack: 9.6
   num_pts = 4
-  if (rate < 25000):
+  if (rate < 2*(10**5)):
     num_pts = num_pts / 2
-  elif (rate > 100000000):
+  elif (rate > 5000000000):
     num_pts = num_pts * 2
 
   return int(num_pts)
@@ -603,8 +714,8 @@ def plot_stats(args, fig, ax, rates):
 
 def plot_block_report(args, fig, ax):
   x, y = node_pos["Pronto Fabric"]
-  y = y - .5
-  x = x
+  y = y - .45
+  x = x - .1
   rectangles = {'Attack\nBlocked!' : mpatch.Rectangle((x, y), .5, .20, linewidth=1, edgecolor='g', facecolor='g')}
   return plot_rectangles(ax, rectangles, "w")
 
@@ -658,33 +769,96 @@ agg_x = []
 agg_drone_y = []
 agg_attack_y = []
 
+
 # current attack state machine
 atk_sm = {
   "active":False,
-  "start":0
+  "blocked":False,
+  "start":0,
+  "atk_rx":0
 }
 
 # attack intervals (start time:end time)
 atk_intervals = {}
-def update_atk_intervals(cur_atk_rx, cur_ts):
+def update_atk_intervals(cur_atk_tx, cur_atk_rx, cur_ts):
   global atk_sm, atk_intervals
   prev_sm = copy.copy(atk_sm)
+  atk_sm["atk_rx"] = cur_atk_rx # always update attack rate
+
   # update the state machine.
-  if (not atk_sm["active"]):
-    if (cur_atk_rx > 0):
+  # case: attack is not active or blocked
+  # can transition to attack active
+  if (not (atk_sm["active"] or atk_sm["blocked"])):
+    if (cur_atk_rx > 10000000):
+      print ("transitioning from DEFAULT to ATTACK.")
       atk_sm["active"] = True
       atk_sm["start"] = cur_ts
-  else:
-    if (cur_atk_rx == 0):
+  # case: attack active but not blocked. 
+  # can transition to: attack blocked or attack stopped
+  elif ((atk_sm["active"]) and (not atk_sm["blocked"])):
+    atk_delta = cur_atk_rx - prev_sm["atk_rx"]
+    if (atk_delta < -1000000):
+      if (defense_run):
+        print ("transitioning from ACTIVE to BLOCKED.")
+        atk_sm["blocked"] = True
+    elif (cur_atk_tx == 0):
       atk_sm["active"] = False
-      atk_sm["start"] = 0
+      atk_sm["blocked"] = False
+  # case: attack blocked
+  # can transition to: attack stopped
 
-  # if an attack is ongoing or just completed, 
-  # update the attack records 
+  elif (atk_sm["blocked"]):
+    if (cur_atk_tx == 0):
+      if (defense_run):
+        print ("transitioning from BLOCKED to DEFAULT.")
+        atk_sm["active"] = False
+        atk_sm["blocked"] = False
+
+  # if an attack is ongoing, just got blocked, or just finished, update the records.  
+  # if the attack is or was active, and is not blocked, update the state machine. 
+  # the current attack's start time is valid if an attack is active, or was just active.
   if (prev_sm["active"] or atk_sm["active"]):
     atk_start = max(prev_sm["start"], atk_sm["start"])
-    atk_end = max(atk_start, cur_ts)
-    atk_intervals[atk_start] = atk_end
+    # blocked but not previously blocked --> end
+    if (atk_sm["blocked"] and (not prev_sm["blocked"])):
+      if (defense_run):
+        atk_end = max(atk_start, cur_ts)
+        atk_intervals[atk_start] = atk_end
+    # if an attack ends, that's the end of this attack interval.
+    # previously active but not blocked and now no longer active --> end.
+    elif ((prev_sm["active"] and (not prev_sm["blocked"])) and (not atk_sm["active"])):
+      atk_end = max(atk_start, cur_ts)
+      atk_intervals[atk_start] = atk_end
+
+
+
+# # current attack state machine
+# atk_sm = {
+#   "active":False,
+#   "start":0
+# }
+
+# # attack intervals (start time:end time)
+# atk_intervals = {}
+# def update_atk_intervals(cur_atk_rx, cur_ts):
+#   global atk_sm, atk_intervals
+#   prev_sm = copy.copy(atk_sm)
+#   # update the state machine.
+#   if (not atk_sm["active"]):
+#     if (cur_atk_rx > 0):
+#       atk_sm["active"] = True
+#       atk_sm["start"] = cur_ts
+#   else:
+#     if (cur_atk_rx == 0):
+#       atk_sm["active"] = False
+#       atk_sm["start"] = 0
+
+#   # if an attack is ongoing or just completed, 
+#   # update the attack records 
+#   if (prev_sm["active"] or atk_sm["active"]):
+#     atk_start = max(prev_sm["start"], atk_sm["start"])
+#     atk_end = max(atk_start, cur_ts)
+#     atk_intervals[atk_start] = atk_end
 
 
 def overlay_attacks(ax, interval):
@@ -694,14 +868,15 @@ def overlay_attacks(ax, interval):
   global atk_intervals
   artists = []
   for t_start, t_end in atk_intervals.items():
+    print ("OVERLAYING ATTACK FROM: %s --> %s"%(t_start, t_end))
     t_dur = max(t_end - t_start, interval) # attacks are at least 1 interval.
     t_dur_ms = int(t_dur * 1000)
     alertstr = "Observed attack\nduration: %i ms"%t_dur_ms
-    x_pos = max(t_end-3, t_start)
+    x_pos = max(t_end-3, t_start+.5)
     a = ax.annotate(
       alertstr, 
-      xy=(x_pos, 10), 
-      xytext=(x_pos-1, .001),
+      xy=(x_pos, 10e9*.4), 
+      xytext=(x_pos-1, 10e9*.1),
       color = "red",
       fontweight = "bold",
       arrowprops=dict(facecolor='red', shrink = 0.05, edgecolor = 'red'),
@@ -715,7 +890,7 @@ def overlay_attacks(ax, interval):
 
 max_window = 10
 
-def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
+def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax,ax2, fig):
   ax.clear()
   global agg_x, agg_drone_y, agg_attack_y
 
@@ -723,13 +898,14 @@ def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   interval = np.average(interval_df.diff().ts[1:-1])
   drone_agg_rate = interval_df.drone_rx[fnum]
   attack_rate = interval_df.atk_rx[fnum]
+  attack_send_rate = interval_df.atk_tx[fnum]
   print ("AGG -- drone: %s attacker: %s"%(drone_agg_rate, attack_rate))
 
   global atk_intervals
   prev_atk_intervals = copy.copy(atk_intervals)
-  update_atk_intervals(attack_rate, cur_ts)
+  update_atk_intervals(attack_send_rate, attack_rate, cur_ts)
   if (prev_atk_intervals != atk_intervals):
-    print ("new attack detected!")
+    print ("attack change detected!")
     print (atk_intervals)
 
   agg_x.append(cur_ts)
@@ -738,13 +914,13 @@ def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
 
   # clear and redraw
   ax.clear()
-  setup_rate_pane(ax)
-  drone_line,  = ax.plot(agg_x, agg_drone_y, label = "drones", color = "b")
-  attack_line,  = ax.plot(agg_x, agg_attack_y, label = "attacker", color = "r", linestyle = "-.")
-  ax.legend(loc = "upper left")
+  drone_line,  = ax.plot(agg_x, agg_drone_y, color = "b")
+  attack_line,  = ax2.plot(agg_x, agg_attack_y, color = "r", linestyle = "-.")
+  # ax.legend(loc = "upper left")
+  setup_rate_pane(ax, ax2)
 
 
-  artists = overlay_attacks(ax, interval)
+  artists = overlay_attacks(ax2, interval)
 
   # ax.autoscale()
   # ax.relim()
@@ -752,7 +928,7 @@ def animateAggAx(fnum, args, intervalrecs, interval_df, G, ax, fig):
   min_x = max(np.min(agg_x), max_x - max_window)
   ax.set_xlim((min_x, max_x))
 
-  set_agg_lims(ax)
+  # set_agg_lims(ax)
 
   return [drone_line, attack_line]+artists
 
